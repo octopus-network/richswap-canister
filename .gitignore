@@ -27,3 +27,4 @@ dist/
 # docs
 *.pdf
 *.tex
+*.tmp

@@ -2,12 +2,11 @@ use candid::{
     types::{Serializer, Type, TypeInner},
     CandidType,
 };
-use serde::Serialize;
 use std::ops::{
     Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign,
 };
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug)]
 pub struct Decimal {
     inner: rust_decimal::Decimal,
 }
@@ -406,6 +405,15 @@ impl<'de> serde::Deserialize<'de> for Decimal {
         D: serde::de::Deserializer<'de>,
     {
         deserializer.deserialize_any(DecimalVisitor)
+    }
+}
+
+impl serde::Serialize for Decimal {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        serializer.serialize_str(&self.inner.to_string())
     }
 }
 

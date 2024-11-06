@@ -1,37 +1,45 @@
-type CoinBalance = record { id : CoinId; value : nat };
-type CoinId = record { tx : nat32; block : nat64 };
+type CoinBalance = record { id : text; value : nat };
+type CoinMeta = record {
+  id : text;
+  decimals : nat8;
+  min_amount : text;
+  symbol : text;
+};
 type ExchangeError = variant {
   InvalidNumeric;
   Overflow;
   TooSmallFunds;
+  BtcRequired;
   InvalidPool;
+  PoolAlreadyExists;
   InvalidTxid;
   InvalidLiquidity;
+  EmptyPool;
   InvalidRequirements;
   FeeNotEnough;
+  ChainKeyError;
   AmountGreaterThanUtxo;
   InsufficientFunds;
 };
-type InitArgs = record { x : SerializedUtxo; y : SerializedUtxo; addr : text };
-type Output = record { balance : CoinBalance; address : text };
-type Result = variant { Ok : SwapOffer; Err : ExchangeError };
-type SerializedUtxo = record {
-  satoshis : nat64;
-  balance : CoinBalance;
-  txid : text;
-  vout : nat32;
-};
+type Output = record { balance : CoinBalance; pubkey : text };
+type Result = variant { Ok : text; Err : ExchangeError };
+type Result_1 = variant { Ok; Err : ExchangeError };
+type Result_2 = variant { Ok : SwapOffer; Err : ExchangeError };
 type SwapOffer = record {
   maker_input : vec Utxo;
   tx_fee : text;
   price : text;
   outputs : vec Output;
 };
-type SwapQuery = record { balance : CoinBalance; address : text };
+type SwapQuery = record { balance : CoinBalance; pubkey : text };
 type Utxo = record {
   satoshis : nat64;
-  tx_id : vec nat8;
   balance : CoinBalance;
+  txid : text;
   vout : nat32;
 };
-service : (InitArgs) -> { preswap : (SwapQuery) -> (Result) query }
+service : {
+  create : (CoinMeta, CoinMeta) -> (Result);
+  mock_add_liquidity : (Utxo, Utxo, text) -> (Result_1);
+  pre_swap : (text, SwapQuery) -> (Result_2) query;
+}
