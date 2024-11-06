@@ -111,8 +111,8 @@ impl LiquidityPool {
             let x_supply = x.balance.decimal(self.x_meta.decimals);
             let y_supply = y.balance.decimal(self.y_meta.decimals);
             self.k = x_supply.unwrap() * y_supply.unwrap().truncate(K_MAX_SCALE);
-            self.x_utxo.replace(x);
-            self.y_utxo.replace(y);
+            self.x_utxo = Some(x);
+            self.y_utxo = Some(y);
         }
         Ok(())
     }

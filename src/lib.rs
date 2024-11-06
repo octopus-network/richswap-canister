@@ -117,7 +117,7 @@ impl<'de> serde::Deserialize<'de> for Pubkey {
     }
 }
 
-#[derive(Eq, PartialEq, Clone, Debug, Serialize)]
+#[derive(Eq, PartialEq, Clone, Debug)]
 pub struct Txid([u8; 32]);
 
 impl CandidType for Txid {
@@ -184,6 +184,15 @@ impl<'de> serde::Deserialize<'de> for Txid {
         D: serde::de::Deserializer<'de>,
     {
         deserializer.deserialize_any(TxidVisitor)
+    }
+}
+
+impl serde::Serialize for Txid {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }
 
@@ -425,13 +434,23 @@ where
     })
 }
 
-pub(crate) fn with_pool_mut<F, R>(id: &Pubkey, f: F) -> R
+pub(crate) fn with_pool_mut<F>(id: &Pubkey, f: F) -> Result<(), ExchangeError>
 where
-    F: Fn(&mut Option<LiquidityPool>) -> R,
+    F: FnOnce(Option<LiquidityPool>) -> Result<Option<LiquidityPool>, ExchangeError>,
 {
     POOLS.with_borrow_mut(|p| {
-        let mut pool = p.get(&id);
-        f(&mut pool)
+        let pool = f(p.get(&id));
+        match pool {
+            Ok(Some(pool)) => {
+                p.insert(id.clone(), pool);
+                Ok(())
+            }
+            Ok(None) => {
+                p.remove(&id);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     })
 }
 

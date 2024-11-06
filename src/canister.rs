@@ -37,10 +37,11 @@ pub async fn create(x: CoinMeta, y: CoinMeta) -> Result<Pubkey, ExchangeError> {
 #[update]
 pub async fn mock_add_liquidity(x: Utxo, y: Utxo, pubkey: Pubkey) -> Result<(), ExchangeError> {
     crate::with_pool_mut(&pubkey, |p| {
-        p.as_mut()
-            .ok_or(ExchangeError::InvalidPool)?
-            .add_liquidity(x.clone(), y.clone())
-    })
+        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+        pool.add_liquidity(x.clone(), y.clone())?;
+        Ok(Some(pool))
+    })?;
+    Ok(())
 }
 
 fn ensure_owner() -> Result<(), String> {
