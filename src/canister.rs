@@ -102,7 +102,7 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
         {
             (i < psbt.inputs.len())
                 .then(|| ())
-                .ok_or("input not enough".to_string())?;
+                .ok_or("invalid psbt: input not enough".to_string())?;
             let mut input = &mut psbt.inputs[i];
             let sighash = cache
                 .taproot_key_spend_signature_hash(
@@ -111,7 +111,6 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                     TapSighashType::All,
                 )
                 .map_err(|e| e.to_string())?;
-            // let msg = Message::from_digest(*sighash.as_ref());
             // TODO key_id
             let signning_arg = SignWithSchnorrArgument {
                 message: AsRef::<[u8; 32]>::as_ref(&sighash).to_vec(),

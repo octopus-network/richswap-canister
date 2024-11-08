@@ -37,7 +37,7 @@ pub struct Utxo {
     pub satoshis: u64,
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug, Serialize)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
 pub struct Pubkey(bitcoin::XOnlyPublicKey);
 
 impl Pubkey {
@@ -101,15 +101,6 @@ impl<'de> serde::de::Visitor<'de> for PubkeyVisitor {
         Pubkey::from_str(value)
             .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
     }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<Pubkey, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(Pubkey(bitcoin::XOnlyPublicKey::from_slice(v).map_err(
-            |_| E::invalid_value(serde::de::Unexpected::Bytes(v), &"a Bitcoin Pubkey"),
-        )?))
-    }
 }
 
 impl<'de> serde::Deserialize<'de> for Pubkey {
@@ -118,6 +109,15 @@ impl<'de> serde::Deserialize<'de> for Pubkey {
         D: serde::de::Deserializer<'de>,
     {
         deserializer.deserialize_any(PubkeyVisitor)
+    }
+}
+
+impl serde::Serialize for Pubkey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
     }
 }
 
@@ -496,7 +496,9 @@ pub(crate) async fn create_pool(x: CoinMeta, y: CoinMeta) -> Result<Pubkey, Exch
                 .await
                 .inspect_err(|(_, e)| ic_cdk::println!("{:?}", e))
                 .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-            let pubkey = Pubkey::from_raw(res.0.public_key);
+            // TODO why ICP returns a 33-bytes schnorr key
+            // assert_eq!(res.0.public_key.len(), 32);
+            let pubkey = Pubkey::from_raw(res.0.public_key[1..].to_vec());
         } else {
             let arg = SchnorrPublicKeyArgument {
                 canister_id: None,
@@ -510,7 +512,9 @@ pub(crate) async fn create_pool(x: CoinMeta, y: CoinMeta) -> Result<Pubkey, Exch
                 .await
                 .inspect_err(|(_, e)| ic_cdk::println!("{:?}", e))
                 .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-            let pubkey = Pubkey::from_raw(res.0.public_key);
+            // TODO why ICP returns a 33-bytes schnorr key
+            // assert_eq!(res.0.public_key.len(), 32);
+            let pubkey = Pubkey::from_raw(res.0.public_key[1..].to_vec());
         }
     }
 
@@ -522,4 +526,11 @@ pub(crate) async fn create_pool(x: CoinMeta, y: CoinMeta) -> Result<Pubkey, Exch
         });
     });
     Ok(pubkey)
+}
+
+#[test]
+pub fn ser_deser_pubkey() {
+    use std::str::FromStr;
+    let pk = Pubkey::from_str("008b9e7248411b06d55cf8b497d204d35af341a00a268aa15f425128e951a095");
+    assert!(pk.is_ok());
 }
