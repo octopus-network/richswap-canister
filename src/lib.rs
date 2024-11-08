@@ -8,8 +8,9 @@ use candid::{
     CandidType, Deserialize,
 };
 pub use decimal::Decimal;
-use ic_cdk::api::management_canister::ecdsa::{
-    ecdsa_public_key, EcdsaCurve, EcdsaKeyId, EcdsaPublicKeyArgument,
+use ic_cdk::api::management_canister::schnorr::{
+    self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument, SchnorrPublicKeyResponse,
+    SignWithSchnorrArgument, SignWithSchnorrResponse,
 };
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
@@ -37,11 +38,11 @@ pub struct Utxo {
 }
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug, Serialize)]
-pub struct Pubkey(bitcoin::PublicKey);
+pub struct Pubkey(bitcoin::XOnlyPublicKey);
 
 impl Pubkey {
     pub fn from_raw(key: Vec<u8>) -> Self {
-        Self(bitcoin::PublicKey::from_slice(&key).expect("invalid pubkey"))
+        Self(bitcoin::XOnlyPublicKey::from_slice(&key).expect("invalid pubkey"))
     }
 }
 
@@ -59,14 +60,17 @@ impl CandidType for Pubkey {
 }
 
 impl Storable for Pubkey {
-    const BOUND: Bound = Bound::Unbounded;
+    const BOUND: Bound = Bound::Bounded {
+        max_size: 32,
+        is_fixed_size: true,
+    };
 
     fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-        std::borrow::Cow::Owned(self.0.to_bytes())
+        std::borrow::Cow::Owned(self.0.serialize().to_vec())
     }
 
     fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-        Self(bitcoin::PublicKey::from_slice(&bytes).expect("invalid pubkey"))
+        Self(bitcoin::XOnlyPublicKey::from_slice(&bytes).expect("invalid pubkey"))
     }
 }
 
@@ -74,7 +78,7 @@ impl std::str::FromStr for Pubkey {
     type Err = ExchangeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        bitcoin::PublicKey::from_str(s)
+        bitcoin::XOnlyPublicKey::from_str(s)
             .map(|pk| Self(pk))
             .map_err(|_| ExchangeError::InvalidNumeric)
     }
@@ -102,9 +106,9 @@ impl<'de> serde::de::Visitor<'de> for PubkeyVisitor {
     where
         E: serde::de::Error,
     {
-        Ok(Pubkey(bitcoin::PublicKey::from_slice(v).map_err(|_| {
-            E::invalid_value(serde::de::Unexpected::Bytes(v), &"a Bitcoin Pubkey")
-        })?))
+        Ok(Pubkey(bitcoin::XOnlyPublicKey::from_slice(v).map_err(
+            |_| E::invalid_value(serde::de::Unexpected::Bytes(v), &"a Bitcoin Pubkey"),
+        )?))
     }
 }
 
@@ -117,7 +121,7 @@ impl<'de> serde::Deserialize<'de> for Pubkey {
     }
 }
 
-#[derive(Eq, PartialEq, Clone, Debug)]
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
 pub struct Txid([u8; 32]);
 
 impl CandidType for Txid {
@@ -140,6 +144,13 @@ impl std::str::FromStr for Txid {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let bytes = bitcoin::Txid::from_str(s).map_err(|_| ExchangeError::InvalidTxid)?;
         Ok(Self(*AsRef::<[u8; 32]>::as_ref(&bytes)))
+    }
+}
+
+impl Into<bitcoin::Txid> for Txid {
+    fn into(self) -> bitcoin::Txid {
+        use bitcoin::hashes::Hash;
+        bitcoin::Txid::from_byte_array(self.0)
     }
 }
 
@@ -249,6 +260,13 @@ impl CoinId {
     #[inline]
     pub const fn btc() -> Self {
         Self { block: 0, tx: 0 }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![];
+        bytes.extend_from_slice(self.block.to_be_bytes().as_ref());
+        bytes.extend_from_slice(self.tx.to_be_bytes().as_ref());
+        bytes
     }
 }
 
@@ -466,29 +484,29 @@ pub(crate) async fn create_pool(x: CoinMeta, y: CoinMeta) -> Result<Pubkey, Exch
 
     cfg_if::cfg_if! {
         if #[cfg(feature = "dev")] {
-            let arg = EcdsaPublicKeyArgument {
+            let arg = SchnorrPublicKeyArgument {
                 canister_id: None,
-                derivation_path: vec![b"m/44'/0'/1'/0/0".to_vec()],
-                key_id: EcdsaKeyId {
-                    curve: EcdsaCurve::Secp256k1,
+                derivation_path: vec![base_id.to_bytes()],
+                key_id: SchnorrKeyId {
+                    algorithm: SchnorrAlgorithm::Bip340secp256k1,
                     name: "dfx_test_key".to_string(),
                 },
             };
-            let res = ecdsa_public_key(arg)
+            let res = schnorr::schnorr_public_key(arg)
                 .await
                 .inspect_err(|(_, e)| ic_cdk::println!("{:?}", e))
                 .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
             let pubkey = Pubkey::from_raw(res.0.public_key);
         } else {
-            let arg = EcdsaPublicKeyArgument {
+            let arg = SchnorrPublicKeyArgument {
                 canister_id: None,
-                derivation_path: vec![b"m/44'/0'/0'/0/0".to_vec()],
-                key_id: EcdsaKeyId {
-                    curve: EcdsaCurve::Secp256k1,
+                derivation_path: vec![base_id.to_bytes()],
+                key_id: SchnorrKeyId {
+                    algorithm: SchnorrAlgorithm::Bip340secp256k1,
                     name: base_id.to_string(),
                 },
             };
-            let res = ecdsa_public_key(arg)
+            let res = schnorr::schnorr_public_key(arg)
                 .await
                 .inspect_err(|(_, e)| ic_cdk::println!("{:?}", e))
                 .map_err(|(_, _)| ExchangeError::ChainKeyError)?;

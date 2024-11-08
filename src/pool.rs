@@ -92,6 +92,14 @@ impl LiquidityPool {
         }
     }
 
+    pub fn base_id(&self) -> CoinId {
+        if self.x_meta.id == CoinId::btc() {
+            self.y_meta.id
+        } else {
+            self.x_meta.id
+        }
+    }
+
     // TODO ignore add_liquidity during run
     pub(crate) fn add_liquidity(&mut self, x: Utxo, y: Utxo) -> Result<(), ExchangeError> {
         (x.balance.id == self.x_meta.id)
