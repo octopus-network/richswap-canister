@@ -7,7 +7,7 @@ use bitcoin::{
     secp256k1::{Message, Secp256k1},
     sighash::{Prevouts, SighashCache},
     taproot::Signature,
-    TapSighashType,
+    TapSighashType, Witness,
 };
 use candid::{CandidType, Deserialize, Principal};
 use ic_cdk::api::management_canister::schnorr::{
@@ -103,7 +103,7 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             (i < psbt.inputs.len())
                 .then(|| ())
                 .ok_or("invalid psbt: input not enough".to_string())?;
-            let mut input = &mut psbt.inputs[i];
+            let input = &mut psbt.inputs[i];
             let sighash = cache
                 .taproot_key_spend_signature_hash(
                     i,
@@ -131,8 +131,7 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 .expect("chain-key signature"),
                 sighash_type: TapSighashType::All,
             };
-            // TODO where does the sig should be put into?
-            // input.tap_script_sigs.insert((pubkey.0, None), sig);
+            input.final_script_witness = Some(Witness::p2tr_key_spend(&sig));
         }
     }
     // TODO replace the utxo
@@ -146,3 +145,20 @@ fn ensure_owner() -> Result<(), String> {
 }
 
 ic_cdk::export_candid!();
+
+#[test]
+pub fn debug_psbt() {
+    let psbt_hex = "70736274ff0100fd06010200000003cd83337ead16dc2444c93b5acb9d39098fdb775fd61bbec9285a79c52619f7180000000000ffffffff69591368ad3a90e220021d38bed0d4847a6ee0129694f0944ddb3dcb39e96dd60000000000ffffffff4464fe251607338f58cf489f0c8af5b4d4fb8710bc1a7e07f34b313f80abc4600100000000ffffffff034bb3faa006000000225120bad9dd7f848a0e18097a512115fa6db0c0fc550271e2d918941438bb2b74e23b80cc060200000000225120bad9dd7f848a0e18097a512115fa6db0c0fc550271e2d918941438bb2b74e23bb5dc34af02000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9000000000001012b00366e010000000022512077e91eed5b095581e0dfd14d0f6b9a9d8eb22180eba7d43c61d2ba4964b440ed0001012b00902f500900000022512077e91eed5b095581e0dfd14d0f6b9a9d8eb22180eba7d43c61d2ba4964b440ed0001012b2202000000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce90108420140cbe05231f75174d648490cbdcdb9848065849d9b83f5254114944e8fd217266e90f56240f5723c2e901ec4f44685212eb20ed0408cd23fec051fcd18e0272b3500000000";
+    let psbt_bytes = hex::decode(&psbt_hex).unwrap();
+    let mut psbt = Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
+    psbt.inputs.iter().for_each(|input| {
+        println!("{:?}\n", input);
+    });
+    psbt.outputs.iter().for_each(|output| {
+        println!("{:?}\n", output);
+    });
+    psbt.unsigned_tx.output.iter().for_each(|output| {
+        println!("{:?}\n", output);
+    });
+    assert!(false);
+}
