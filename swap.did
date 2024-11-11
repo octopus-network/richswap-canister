@@ -25,6 +25,13 @@ type Output = record { balance : CoinBalance; pubkey : text };
 type Result = variant { Ok : text; Err : ExchangeError };
 type Result_1 = variant { Ok; Err : ExchangeError };
 type Result_2 = variant { Ok : SwapOffer; Err : ExchangeError };
+type Result_3 = variant { Ok : text; Err : text };
+type SignPsbtCallingArgs = record {
+  method : text;
+  tx_id : text;
+  pool_id : opt text;
+  psbt_hex : text;
+};
 type SwapOffer = record {
   maker_input : vec Utxo;
   tx_fee : text;
@@ -42,4 +49,5 @@ service : {
   create : (CoinMeta, CoinMeta) -> (Result);
   mock_add_liquidity : (Utxo, Utxo, text) -> (Result_1);
   pre_swap : (text, SwapQuery) -> (Result_2) query;
+  sign_psbt : (SignPsbtCallingArgs) -> (Result_3);
 }
