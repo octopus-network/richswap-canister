@@ -7,7 +7,7 @@ use bitcoin::{
     secp256k1::{Message, Secp256k1},
     sighash::{Prevouts, SighashCache},
     taproot::Signature,
-    TapSighashType, Witness,
+    Amount, OutPoint, TapSighashType, TxOut, Witness,
 };
 use candid::{CandidType, Deserialize, Principal};
 use ic_cdk::api::management_canister::schnorr::{
@@ -63,6 +63,15 @@ pub struct SignPsbtCallingArgs {
     pool_id: Option<Pubkey>,
 }
 
+pub(crate) fn cmp_and_clone(mine: &[Utxo], outpoint: &OutPoint) -> Option<Utxo> {
+    for utxo in mine.iter() {
+        if Into::<bitcoin::Txid>::into(utxo.txid) == outpoint.txid && utxo.vout == outpoint.vout {
+            return Some(utxo.clone());
+        }
+    }
+    None
+}
+
 // TODO only called by orchestrator
 // TODO function signature
 #[update]
@@ -88,18 +97,18 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
     let x_utxo = pool
         .x_utxo
         .as_ref()
-        .ok_or("pool not initialized".to_string())?;
+        .ok_or("pool not initialized".to_string())?
+        .clone();
     let y_utxo = pool
         .y_utxo
         .as_ref()
-        .ok_or("pool not initialized".to_string())?;
+        .ok_or("pool not initialized".to_string())?
+        .clone();
     // TODO check outputs
-
+    let utxos = [x_utxo, y_utxo];
     for (i, input) in psbt.unsigned_tx.input.iter().enumerate() {
         let outpoint = &input.previous_output;
-        if outpoint.txid == x_utxo.txid.into() && outpoint.vout == x_utxo.vout
-            || outpoint.txid == y_utxo.txid.into() && outpoint.vout == y_utxo.vout
-        {
+        if let Some(utxo) = cmp_and_clone(&utxos, outpoint) {
             (i < psbt.inputs.len())
                 .then(|| ())
                 .ok_or("invalid psbt: input not enough".to_string())?;
@@ -107,7 +116,17 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             let sighash = cache
                 .taproot_key_spend_signature_hash(
                     i,
-                    &Prevouts::All(&psbt.unsigned_tx.output),
+                    &Prevouts::All(
+                        &psbt
+                            .unsigned_tx
+                            .input
+                            .iter()
+                            .map(|i| TxOut {
+                                script_pubkey: i.script_sig.clone(),
+                                value: Amount::from_sat(utxo.satoshis),
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
                     TapSighashType::All,
                 )
                 .map_err(|e| e.to_string())?;
@@ -152,6 +171,7 @@ pub fn debug_psbt() {
     let psbt_hex = "70736274ff0100fd06010200000003cd83337ead16dc2444c93b5acb9d39098fdb775fd61bbec9285a79c52619f7180000000000ffffffff69591368ad3a90e220021d38bed0d4847a6ee0129694f0944ddb3dcb39e96dd60000000000ffffffff4464fe251607338f58cf489f0c8af5b4d4fb8710bc1a7e07f34b313f80abc4600100000000ffffffff034bb3faa006000000225120bad9dd7f848a0e18097a512115fa6db0c0fc550271e2d918941438bb2b74e23b80cc060200000000225120bad9dd7f848a0e18097a512115fa6db0c0fc550271e2d918941438bb2b74e23bb5dc34af02000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9000000000001012b00366e010000000022512077e91eed5b095581e0dfd14d0f6b9a9d8eb22180eba7d43c61d2ba4964b440ed01084301418040c5daa4a102f38c357f693222d86fec25fe0d3302246d8878e977fd314b64c5ecada807fa25327bd49d609f407ee38d452f77f1751e28aa64fa507dbafa5b010001012b00902f500900000022512077e91eed5b095581e0dfd14d0f6b9a9d8eb22180eba7d43c61d2ba4964b440ed0001012b2202000000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce90108420140cbe05231f75174d648490cbdcdb9848065849d9b83f5254114944e8fd217266e90f56240f5723c2e901ec4f44685212eb20ed0408cd23fec051fcd18e0272b3500000000";
     let psbt_hex = "70736274ff0100fd06010200000003cd83337ead16dc2444c93b5acb9d39098fdb775fd61bbec9285a79c52619f7180000000000ffffffff69591368ad3a90e220021d38bed0d4847a6ee0129694f0944ddb3dcb39e96dd60000000000ffffffff4464fe251607338f58cf489f0c8af5b4d4fb8710bc1a7e07f34b313f80abc4600100000000ffffffff034bb3faa006000000225120bad9dd7f848a0e18097a512115fa6db0c0fc550271e2d918941438bb2b74e23b80cc060200000000225120bad9dd7f848a0e18097a512115fa6db0c0fc550271e2d918941438bb2b74e23bb5dc34af02000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9000000000001012b00366e010000000022512077e91eed5b095581e0dfd14d0f6b9a9d8eb22180eba7d43c61d2ba4964b440ed0001012b00902f500900000022512077e91eed5b095581e0dfd14d0f6b9a9d8eb22180eba7d43c61d2ba4964b440ed0001012b2202000000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce90108420140cbe05231f75174d648490cbdcdb9848065849d9b83f5254114944e8fd217266e90f56240f5723c2e901ec4f44685212eb20ed0408cd23fec051fcd18e0272b3500000000";
     let psbt_hex = "70736274ff0100fd06010200000003cd83337ead16dc2444c93b5acb9d39098fdb775fd61bbec9285a79c52619f7180000000000ffffffff69591368ad3a90e220021d38bed0d4847a6ee0129694f0944ddb3dcb39e96dd60000000000ffffffff4464fe251607338f58cf489f0c8af5b4d4fb8710bc1a7e07f34b313f80abc4600100000000ffffffff034bb3faa006000000225120bad9dd7f848a0e18097a512115fa6db0c0fc550271e2d918941438bb2b74e23b80cc060200000000225120bad9dd7f848a0e18097a512115fa6db0c0fc550271e2d918941438bb2b74e23bb5dc34af02000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9000000000001012b00366e010000000022512077e91eed5b095581e0dfd14d0f6b9a9d8eb22180eba7d43c61d2ba4964b440ed01084301413fea86eae1191e5349b7d5e12486434942befddcc5df98ccf239bba14f7a0d111b8fe8fca2a5372d12ad8827ee190ea6c059b0541a6e1159f0139aea501e7fc0010001012b00902f500900000022512077e91eed5b095581e0dfd14d0f6b9a9d8eb22180eba7d43c61d2ba4964b440ed01084301416307c7463cd02797532ceac344045d5a72ba1cc415eda32046e6612408d75100d7c91b4ac773dff64bb863b75b7f92e53331a4f67ba13d3b82cf0a7f8c331c92010001012b2202000000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce90108420140cbe05231f75174d648490cbdcdb9848065849d9b83f5254114944e8fd217266e90f56240f5723c2e901ec4f44685212eb20ed0408cd23fec051fcd18e0272b3500000000";
+    let psbt_hex = "70736274ff0100fd61010200000003cd83337ead16dc2444c93b5acb9d39098fdb775fd61bbec9285a79c52619f7180000000000ffffffff69591368ad3a90e220021d38bed0d4847a6ee0129694f0944ddb3dcb39e96dd60000000000ffffffff4464fe251607338f58cf489f0c8af5b4d4fb8710bc1a7e07f34b313f80abc4600100000000ffffffff0680cc060200000000225120be9a0f4c397015d530f77f65b419adcf7d24046af4baab6b47719ae12052c7aa8033023b00000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce92202000000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9b5dc34af020000000f6a5d0c00c1a233af03b5b9d3f92a022202000000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9b5dc34af020000000f6a5d0c00c1a233af03cbe6ea876a04000000000001012b00366e0100000000225120be9a0f4c397015d530f77f65b419adcf7d24046af4baab6b47719ae12052c7aa0001012b00902f500900000022512078100e16e6c16cc766bd9e9a8096fe20893f5e0d84acef4745eeb70c4273889e2215c0d6c33b01cb97b882555bbca2fc024ad0ba1e1d1395ce8c93588f1b0d18f883cd2320d6c33b01cb97b882555bbca2fc024ad0ba1e1d1395ce8c93588f1b0d18f883cdacc00001012b00ca9a3b00000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce90108420140e758668acfa8ab5ef186ab52d804751fd05357d27ed50a9196505834086d4dbfd9cc17ec6df7078e4bea77839c2c8a6ab2109f31c92607e6b664f0c6fd503c3b00000000000000";
     let psbt_bytes = hex::decode(&psbt_hex).unwrap();
     let psbt = Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
     psbt.inputs.iter().for_each(|input| {
