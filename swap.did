@@ -21,7 +21,19 @@ type ExchangeError = variant {
   AmountGreaterThanUtxo;
   InsufficientFunds;
 };
+type InputRune = record {
+  tx_id : text;
+  vout : nat32;
+  btc_amount : nat;
+  rune_amount : opt nat;
+  rune_id : opt text;
+};
 type Output = record { balance : CoinBalance; pubkey : text };
+type OutputRune = record {
+  btc_amount : nat;
+  rune_amount : opt nat;
+  rune_id : opt text;
+};
 type Result = variant { Ok : text; Err : ExchangeError };
 type Result_1 = variant { Ok; Err : ExchangeError };
 type Result_2 = variant { Ok : SwapOffer; Err : ExchangeError };
@@ -29,6 +41,8 @@ type Result_3 = variant { Ok : text; Err : text };
 type SignPsbtCallingArgs = record {
   method : text;
   tx_id : text;
+  input_runes : vec InputRune;
+  output_runes : vec OutputRune;
   pool_id : opt text;
   psbt_hex : text;
 };

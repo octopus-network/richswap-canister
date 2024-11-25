@@ -8,9 +8,15 @@ use candid::{
     CandidType, Deserialize,
 };
 pub use decimal::Decimal;
-use ic_cdk::api::management_canister::schnorr::{
-    self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument, SchnorrPublicKeyResponse,
-    SignWithSchnorrArgument, SignWithSchnorrResponse,
+use ic_cdk::api::management_canister::{
+    ecdsa::{
+        self, EcdsaCurve, EcdsaKeyId, EcdsaPublicKeyArgument, SignWithEcdsaArgument,
+        SignWithEcdsaResponse,
+    },
+    schnorr::{
+        self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument, SignWithSchnorrArgument,
+        SignWithSchnorrResponse,
+    },
 };
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
@@ -38,11 +44,13 @@ pub struct Utxo {
 }
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
-pub struct Pubkey(bitcoin::XOnlyPublicKey);
+pub struct Pubkey(pub(crate) bitcoin::PublicKey);
 
 impl Pubkey {
-    pub fn from_raw(key: Vec<u8>) -> Self {
-        Self(bitcoin::XOnlyPublicKey::from_slice(&key).expect("invalid pubkey"))
+    pub fn from_raw(key: Vec<u8>) -> Result<Pubkey, String> {
+        bitcoin::PublicKey::from_slice(&key)
+            .map(|s| Pubkey(s))
+            .map_err(|_| "invalid pubkey".to_string())
     }
 }
 
@@ -61,16 +69,16 @@ impl CandidType for Pubkey {
 
 impl Storable for Pubkey {
     const BOUND: Bound = Bound::Bounded {
-        max_size: 32,
+        max_size: 33,
         is_fixed_size: true,
     };
 
     fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-        std::borrow::Cow::Owned(self.0.serialize().to_vec())
+        std::borrow::Cow::Owned(self.0.to_bytes())
     }
 
     fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-        Self(bitcoin::XOnlyPublicKey::from_slice(&bytes).expect("invalid pubkey"))
+        Self(bitcoin::PublicKey::from_slice(&bytes).expect("invalid pubkey"))
     }
 }
 
@@ -78,7 +86,7 @@ impl std::str::FromStr for Pubkey {
     type Err = ExchangeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        bitcoin::XOnlyPublicKey::from_str(s)
+        bitcoin::PublicKey::from_str(s)
             .map(|pk| Self(pk))
             .map_err(|_| ExchangeError::InvalidNumeric)
     }
@@ -207,7 +215,7 @@ impl serde::Serialize for Txid {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
 pub struct CoinId {
     pub block: u64,
     pub tx: u32,
@@ -472,60 +480,110 @@ where
     })
 }
 
+pub(crate) fn reset_all_pools() {
+    POOLS.with_borrow_mut(|p| p.clear_new());
+    POOL_TOKENS.with_borrow_mut(|p| p.clear_new());
+}
+
 pub(crate) fn has_pool(id: &CoinId) -> bool {
     POOL_TOKENS.with_borrow(|p| p.contains_key(&id))
 }
 
-pub(crate) async fn create_pool(x: CoinMeta, y: CoinMeta) -> Result<Pubkey, ExchangeError> {
+pub(crate) async fn request_schnorr_key(
+    key_name: String,
+    path: Vec<u8>,
+) -> Result<Pubkey, ExchangeError> {
+    let arg = SchnorrPublicKeyArgument {
+        canister_id: None,
+        derivation_path: vec![path],
+        key_id: SchnorrKeyId {
+            algorithm: SchnorrAlgorithm::Bip340secp256k1,
+            name: key_name,
+        },
+    };
+    let res = schnorr::schnorr_public_key(arg)
+        .await
+        .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
+    let pubkey =
+        Pubkey::from_raw(res.0.public_key.to_vec()).expect("management api error: invalid pubkey");
+    Ok(pubkey)
+}
+
+pub(crate) async fn request_ecdsa_key(
+    key_name: String,
+    path: Vec<u8>,
+) -> Result<Pubkey, ExchangeError> {
+    let args = EcdsaPublicKeyArgument {
+        canister_id: None,
+        derivation_path: vec![path],
+        key_id: EcdsaKeyId {
+            curve: EcdsaCurve::Secp256k1,
+            name: key_name,
+        },
+    };
+    let res = ecdsa::ecdsa_public_key(args)
+        .await
+        .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
+    let pubkey =
+        Pubkey::from_raw(res.0.public_key.to_vec()).expect("management api error: invalid pubkey");
+    Ok(pubkey)
+}
+
+pub(crate) async fn sign_prehash_with_schnorr(
+    digest: impl AsRef<[u8; 32]>,
+    key_name: String,
+    path: Vec<u8>,
+) -> Result<Vec<u8>, ExchangeError> {
+    let args = SignWithSchnorrArgument {
+        message: digest.as_ref().to_vec(),
+        derivation_path: vec![path],
+        key_id: SchnorrKeyId {
+            algorithm: SchnorrAlgorithm::Bip340secp256k1,
+            name: key_name,
+        },
+    };
+    let (sig,): (SignWithSchnorrResponse,) = schnorr::sign_with_schnorr(args)
+        .await
+        .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
+    Ok(sig.signature)
+}
+
+pub(crate) async fn sign_prehash_with_ecdsa(
+    digest: impl AsRef<[u8; 32]>,
+    key_name: String,
+    path: Vec<u8>,
+) -> Result<Vec<u8>, ExchangeError> {
+    let args = SignWithEcdsaArgument {
+        message_hash: digest.as_ref().to_vec(),
+        derivation_path: vec![path],
+        key_id: EcdsaKeyId {
+            curve: EcdsaCurve::Secp256k1,
+            name: key_name,
+        },
+    };
+    let (sig,): (SignWithEcdsaResponse,) = ecdsa::sign_with_ecdsa(args)
+        .await
+        .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
+    Ok(sig.signature)
+}
+
+pub(crate) async fn create_pool(
+    x: CoinMeta,
+    y: CoinMeta,
+    pubkey: Pubkey,
+) -> Result<(), ExchangeError> {
     let base_id = if x.id == CoinId::btc() { y.id } else { x.id };
     if has_pool(&base_id) {
         return Err(ExchangeError::PoolAlreadyExists);
     }
-
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "dev")] {
-            let arg = SchnorrPublicKeyArgument {
-                canister_id: None,
-                derivation_path: vec![base_id.to_bytes()],
-                key_id: SchnorrKeyId {
-                    algorithm: SchnorrAlgorithm::Bip340secp256k1,
-                    name: "dfx_test_key".to_string(),
-                },
-            };
-            let res = schnorr::schnorr_public_key(arg)
-                .await
-                .inspect_err(|(_, e)| ic_cdk::println!("{:?}", e))
-                .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-            // TODO why ICP returns a 33-bytes schnorr key
-            // assert_eq!(res.0.public_key.len(), 32);
-            let pubkey = Pubkey::from_raw(res.0.public_key[1..].to_vec());
-        } else {
-            let arg = SchnorrPublicKeyArgument {
-                canister_id: None,
-                derivation_path: vec![base_id.to_bytes()],
-                key_id: SchnorrKeyId {
-                    algorithm: SchnorrAlgorithm::Bip340secp256k1,
-                    name: base_id.to_string(),
-                },
-            };
-            let res = schnorr::schnorr_public_key(arg)
-                .await
-                .inspect_err(|(_, e)| ic_cdk::println!("{:?}", e))
-                .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-            // TODO why ICP returns a 33-bytes schnorr key
-            // assert_eq!(res.0.public_key.len(), 32);
-            let pubkey = Pubkey::from_raw(res.0.public_key[1..].to_vec());
-        }
-    }
-
     let pool = LiquidityPool::new(x, y, *DEFAULT_FEE_RATE, pubkey.clone());
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(base_id, pubkey.clone());
         POOLS.with_borrow_mut(|p| {
-            p.insert(pubkey.clone(), pool);
+            p.insert(pubkey, pool);
         });
     });
-    Ok(pubkey)
+    Ok(())
 }
 
 #[test]
@@ -533,4 +591,23 @@ pub fn ser_deser_pubkey() {
     use std::str::FromStr;
     let pk = Pubkey::from_str("008b9e7248411b06d55cf8b497d204d35af341a00a268aa15f425128e951a095");
     assert!(pk.is_ok());
+}
+
+#[test]
+pub fn test_derive_addr() {
+    use bitcoin::key::Secp256k1;
+    use bitcoin::Address;
+    use bitcoin::Network;
+    use bitcoin::XOnlyPublicKey;
+
+    let x_only_pubkey_hex = "b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76";
+    let x_only_pubkey_bytes = hex::decode(x_only_pubkey_hex).expect("Invalid hex");
+
+    let x_only_pubkey =
+        XOnlyPublicKey::from_slice(&x_only_pubkey_bytes).expect("Invalid x-only pubkey");
+
+    let address = Address::p2tr(&Secp256k1::new(), x_only_pubkey, None, Network::Bitcoin);
+
+    println!("Taproot Address: {}", address);
+    assert!(false);
 }

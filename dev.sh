@@ -2,10 +2,8 @@
 
 dfx stop
 dfx start --clean --background
-AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang cargo build --release --target wasm32-unknown-unknown --features dev
 dfx canister create rich-swap
 AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang dfx deploy rich-swap
-#dfx canister install rich-swap --wasm target/wasm32-unknown-unknown/release/rich_swap.wasm -m reinstall -y
 dfx canister call rich-swap create '(
     record {
         id = "0:0";
@@ -29,22 +27,22 @@ fi
 echo "pool id=$p"
 dfx canister call rich-swap mock_add_liquidity "(
     record {
-      satoshis = 24_000_000 : nat64;
+      satoshis = 5_000 : nat64;
       balance = record {
         id = \"0:0\";
-        value = 24_000_000 : nat;
+        value = 5_000 : nat;
       };
-      txid = \"18f71926c5795a28c9be1bd65f77db8f09399dcb5a3bc94424dc16ad7e3383cd\";
+      txid = \"a44dcf3ead4106b3039f504fe976f9ea6133af43b948696a980120f037c860a1\";
       vout = 0 : nat32;
     },
     record {
       satoshis = 546 : nat64;
       balance = record {
         id = \"840001:431\";
-        value = 40_000_000_000 : nat;
+        value = 2_200_000 : nat;
       };
-      txid = \"d66de939cb3ddb4d94f0949612e06e7a84d4d0be381d0220e2903aad68135969\";
-      vout = 0 : nat32;
+      txid = \"d8bc1cd9a3aa2384847bc9f019332a125dae53bbfaebad169152a38cd288a188\";
+      vout = 2 : nat32;
     },
-    $p,
+    \"b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76\",
 )"
