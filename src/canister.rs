@@ -180,7 +180,7 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
         return Err("Pool's UTXOs have been spent".to_string());
     }
 
-    let mut user_rune_outputs = std::collections::HashMap::new();
+    // let mut user_rune_outputs = std::collections::HashMap::new();
     let (mut new_x, mut new_y) = (None::<Utxo>, None::<Utxo>);
     let mut user_pubkey = Option::<Pubkey>::None;
     for (i, output) in psbt.unsigned_tx.output.iter().enumerate() {
@@ -188,62 +188,62 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             continue;
         }
         if output.script_pubkey.is_p2tr() {
-            match extract_pubkey(&output.script_pubkey) {
-                Some(pubkey) if pubkey == pool_id => {
-                    let output_rune = &output_runes[i];
-                    match output_rune.rune_id {
-                        Some(rune_id) => {
-                            let amount = output_rune.rune_amount.ok_or("rune amount required")?;
-                            new_x.replace(Utxo {
-                                txid: tx_id,
-                                vout: i as u32,
-                                balance: CoinBalance {
-                                    id: rune_id,
-                                    value: amount,
-                                },
-                                satoshis: output_rune
-                                    .btc_amount
-                                    .try_into()
-                                    .expect("satoshis amount overflow"),
-                            });
-                        }
-                        None => {
-                            new_y.replace(Utxo {
-                                txid: tx_id,
-                                vout: i as u32,
-                                balance: CoinBalance {
-                                    id: CoinId::btc(),
-                                    value: output_rune.btc_amount,
-                                },
-                                satoshis: output_rune
-                                    .btc_amount
-                                    .try_into()
-                                    .expect("satoshis amount overflow"),
-                            });
-                        }
-                    }
-                }
-                Some(pubkey) => {
-                    user_pubkey.replace(pubkey);
-                    let output_rune = &output_runes[i];
-                    match output_rune.rune_id {
-                        Some(rune_id) => {
-                            let amount = output_rune.rune_amount.ok_or("rune amount required")?;
-                            user_rune_outputs
-                                .entry(rune_id)
-                                .and_modify(|t| *t += amount)
-                                .or_insert(amount);
-                        }
-                        None => {
-                            user_rune_outputs
-                                .entry(CoinId::btc())
-                                .and_modify(|t| *t += output_rune.btc_amount)
-                                .or_insert(output_rune.btc_amount);
-                        }
-                    }
-                }
-                None => {}
-            }
+            // match extract_pubkey(&output.script_pubkey) {
+            //     Some(pubkey) if pubkey == pool_id => {
+            //         let output_rune = &output_runes[i];
+            //         match output_rune.rune_id {
+            //             Some(rune_id) => {
+            //                 let amount = output_rune.rune_amount.ok_or("rune amount required")?;
+            //                 new_x.replace(Utxo {
+            //                     txid: tx_id,
+            //                     vout: i as u32,
+            //                     balance: CoinBalance {
+            //                         id: rune_id,
+            //                         value: amount,
+            //                     },
+            //                     satoshis: output_rune
+            //                         .btc_amount
+            //                         .try_into()
+            //                         .expect("satoshis amount overflow"),
+            //                 });
+            //             }
+            //             None => {
+            //                 new_y.replace(Utxo {
+            //                     txid: tx_id,
+            //                     vout: i as u32,
+            //                     balance: CoinBalance {
+            //                         id: CoinId::btc(),
+            //                         value: output_rune.btc_amount,
+            //                     },
+            //                     satoshis: output_rune
+            //                         .btc_amount
+            //                         .try_into()
+            //                         .expect("satoshis amount overflow"),
+            //                 });
+            //             }
+            //         }
+            //     }
+            //     Some(pubkey) => {
+            //         user_pubkey.replace(pubkey);
+            //         let output_rune = &output_runes[i];
+            //         match output_rune.rune_id {
+            //             Some(rune_id) => {
+            //                 let amount = output_rune.rune_amount.ok_or("rune amount required")?;
+            //                 user_rune_outputs
+            //                     .entry(rune_id)
+            //                     .and_modify(|t| *t += amount)
+            //                     .or_insert(amount);
+            //             }
+            //             None => {
+            //                 user_rune_outputs
+            //                     .entry(CoinId::btc())
+            //                     .and_modify(|t| *t += output_rune.btc_amount)
+            //                     .or_insert(output_rune.btc_amount);
+            //             }
+            //         }
+            //     }
+            //     None => {}
+            // }
         }
     }
 
@@ -257,10 +257,10 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
 
     if user_rune_inputs.len() == 1 {
         // btc -> rune
-        let total_input = user_rune_inputs.get(&CoinId::btc()).expect("");
-        let total_output = user_rune_outputs.get(&CoinId::btc()).expect("");
-        let user_paid =
-            total_input - (total_input - total_output) - new_y.as_ref().expect("").balance.value;
+        // let total_input = user_rune_inputs.get(&CoinId::btc()).expect("");
+        // let total_output = user_rune_outputs.get(&CoinId::btc()).expect("");
+        // let user_paid =
+        //     total_input - (total_input - total_output) - new_y.as_ref().expect("").balance.value;
         // let assert_outputs = pool
         //     .available_to_swap(&SwapQuery {
         //         pubkey: user_pubkey.expect("user pubkey not found"),
@@ -319,8 +319,8 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
     }
     crate::with_pool_mut(&pool_id, |p| {
         let mut pool = p.expect("pool not initialized");
-        pool.x_utxo.replace(new_x.expect("qed;"));
-        pool.y_utxo.replace(new_y.expect("qed;"));
+        // pool.x_utxo.replace(new_x.expect("qed;"));
+        // pool.y_utxo.replace(new_y.expect("qed;"));
         Ok(Some(pool))
     });
 

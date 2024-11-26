@@ -44,5 +44,5 @@ dfx canister call rich-swap mock_add_liquidity "(
       txid = \"d8bc1cd9a3aa2384847bc9f019332a125dae53bbfaebad169152a38cd288a188\";
       vout = 2 : nat32;
     },
-    \"b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76\",
+    $p,
 )"

@@ -52,6 +52,14 @@ impl Pubkey {
             .map(|s| Pubkey(s))
             .map_err(|_| "invalid pubkey".to_string())
     }
+
+    pub fn p2wpkh_addr(&self) -> String {
+        bitcoin::Address::p2wpkh(
+            &bitcoin::key::CompressedPublicKey(self.0.inner),
+            bitcoin::Network::Bitcoin,
+        )
+        .to_string()
+    }
 }
 
 impl CandidType for Pubkey {
@@ -594,7 +602,7 @@ pub fn ser_deser_pubkey() {
 }
 
 #[test]
-pub fn test_derive_addr() {
+pub fn test_derive_p2tr_addr() {
     use bitcoin::key::Secp256k1;
     use bitcoin::Address;
     use bitcoin::Network;
@@ -611,3 +619,6 @@ pub fn test_derive_addr() {
     println!("Taproot Address: {}", address);
     assert!(false);
 }
+
+#[test]
+pub fn test_derive_p2wpkh_addr() {}
