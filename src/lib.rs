@@ -1,6 +1,7 @@
 mod canister;
 mod decimal;
 mod pool;
+mod psbt;
 
 use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_FEE_RATE};
 use candid::{
@@ -167,6 +168,12 @@ impl Into<bitcoin::Txid> for Txid {
     fn into(self) -> bitcoin::Txid {
         use bitcoin::hashes::Hash;
         bitcoin::Txid::from_byte_array(self.0)
+    }
+}
+
+impl From<bitcoin::Txid> for Txid {
+    fn from(txid: bitcoin::Txid) -> Self {
+        Self(*AsRef::<[u8; 32]>::as_ref(&txid))
     }
 }
 
@@ -429,6 +436,8 @@ pub enum ExchangeError {
     EmptyPool,
     #[error("couldn't derive a chain key for pool")]
     ChainKeyError,
+    #[error("invalid psbt: {0}")]
+    InvalidPsbt(String),
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;

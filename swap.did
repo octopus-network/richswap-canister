@@ -11,6 +11,7 @@ type ExchangeError = variant {
   TooSmallFunds;
   BtcRequired;
   InvalidPool;
+  InvalidPsbt : text;
   PoolAlreadyExists;
   InvalidTxid;
   InvalidLiquidity;
@@ -41,12 +42,14 @@ type Result_3 = variant { Ok : text; Err : text };
 type SignPsbtCallingArgs = record {
   method : text;
   tx_id : text;
+  nonce : nat64;
   input_runes : vec InputRune;
   output_runes : vec OutputRune;
   pool_id : opt text;
   psbt_hex : text;
 };
 type SwapOffer = record {
+  nonce : nat64;
   maker_input : vec Utxo;
   tx_fee : text;
   price : text;

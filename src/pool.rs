@@ -15,6 +15,7 @@ pub struct SwapOffer {
     pub outputs: Vec<Output>,
     pub tx_fee: Decimal,
     pub price: Decimal,
+    pub nonce: u64,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, CandidType, Deserialize, Serialize)]
@@ -50,6 +51,7 @@ impl CoinMeta {
 
 #[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LiquidityPool {
+    pub nonce: u64,
     pub x_utxo: Option<Utxo>,
     pub y_utxo: Option<Utxo>,
     pub x_meta: CoinMeta,
@@ -80,6 +82,7 @@ impl Storable for LiquidityPool {
 impl LiquidityPool {
     pub fn new(x_meta: CoinMeta, y_meta: CoinMeta, tx_fee_rate: Decimal, pubkey: Pubkey) -> Self {
         Self {
+            nonce: 0,
             x_utxo: None,
             y_utxo: None,
             x_meta,
@@ -181,7 +184,7 @@ impl LiquidityPool {
             .ok_or(ExchangeError::InvalidNumeric)?;
         let offer = (x_supply - self.k / (y_supply + taker_amount)).truncate(x_meta.decimals);
         let charge = (offer * self.tx_fee_rate).truncate(x_meta.decimals);
-        (offer >= x_meta.min_amount + charge && charge >= x_meta.min_amount)
+        (offer >= x_meta.min_amount + charge)
             .then(|| ())
             .ok_or(ExchangeError::TooSmallFunds)?;
 
@@ -204,6 +207,7 @@ impl LiquidityPool {
             outputs,
             tx_fee: charge,
             price,
+            nonce: self.nonce,
         })
     }
 }

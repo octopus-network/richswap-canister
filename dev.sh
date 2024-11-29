@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 
-dfx stop
-dfx start --clean --background
-dfx canister create rich-swap
-AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang dfx deploy rich-swap
-dfx canister call rich-swap create '(
+# dfx stop
+# dfx start --clean --background
+# dfx canister create rich-swap
+AR=/opt/homebrew/opt/llvm/bin/llvm-ar CC=/opt/homebrew/opt/llvm/bin/clang dfx deploy rich-swap --ic
+dfx canister --ic call rich-swap create '(
     record {
         id = "0:0";
         symbol = "BTC";
@@ -12,7 +12,7 @@ dfx canister call rich-swap create '(
         decimals = 8 : nat8;
     },
     record {
-        id = "840001:431";
+        id = "840000:846";
         symbol = "RICH";
         min_amount = "1";
         decimals = 2 : nat8;
@@ -25,24 +25,24 @@ if [ "$p" = "" ]; then
     exit 1
 fi
 echo "pool id=$p"
-dfx canister call rich-swap mock_add_liquidity "(
+dfx canister call --ic rich-swap mock_add_liquidity "(
     record {
-      satoshis = 5_000 : nat64;
+      satoshis = 4_916 : nat64;
       balance = record {
         id = \"0:0\";
-        value = 5_000 : nat;
+        value = 4_916 : nat;
       };
-      txid = \"a44dcf3ead4106b3039f504fe976f9ea6133af43b948696a980120f037c860a1\";
-      vout = 0 : nat32;
+      txid = \"63ca2c6acf5faf6a8d91e639e0a16bc85086d5aa95b7ec9a6dc9a5038834788d\";
+      vout = 4 : nat32;
     },
     record {
       satoshis = 546 : nat64;
       balance = record {
-        id = \"840001:431\";
-        value = 2_200_000 : nat;
+        id = \"840000:846\";
+        value = 2_866_667 : nat;
       };
-      txid = \"d8bc1cd9a3aa2384847bc9f019332a125dae53bbfaebad169152a38cd288a188\";
+      txid = \"63ca2c6acf5faf6a8d91e639e0a16bc85086d5aa95b7ec9a6dc9a5038834788d\";
       vout = 2 : nat32;
     },
-    $p,
+    \"021774b3f1c2d9f8e51529eda4a54624e2f067826b42281fb5b9a9b40fd4a967e9\",
 )"
