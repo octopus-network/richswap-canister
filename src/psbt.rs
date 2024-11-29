@@ -2,16 +2,16 @@ use crate::{
     canister::{InputRune, OutputRune},
     CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo,
 };
-use bitcoin::{Psbt, Script};
+use bitcoin::{hashes::Hash, Psbt, PubkeyHash, Script};
 
-pub(crate) fn extract_script(script: &Script) -> Option<Pubkey> {
+pub(crate) fn extract_pubkey_hash(script: &Script) -> Option<PubkeyHash> {
     for inst in script.instructions() {
         match inst {
             Ok(bitcoin::blockdata::script::Instruction::PushBytes(bytes)) => {
-                if bytes.len() == 33 {
+                if bytes.len() == 20 {
                     return Some(
-                        Pubkey::from_raw(bytes.as_bytes().to_vec())
-                            .expect("pubkey must be compressed"),
+                        bitcoin::PubkeyHash::from_slice(bytes.as_bytes())
+                            .expect("pubkey hash is 20 bytes"),
                     );
                 }
             }
@@ -24,7 +24,7 @@ pub(crate) fn extract_script(script: &Script) -> Option<Pubkey> {
 pub(crate) fn inputs(
     psbt: &Psbt,
     input_runes: &[InputRune],
-) -> Result<Vec<(Utxo, Pubkey)>, ExchangeError> {
+) -> Result<Vec<(Utxo, PubkeyHash)>, ExchangeError> {
     (psbt.unsigned_tx.input.len() == input_runes.len() && psbt.inputs.len() == input_runes.len())
         .then(|| ())
         .ok_or(ExchangeError::InvalidPsbt("inputs not enough".to_string()))?;
@@ -41,9 +41,9 @@ pub(crate) fn inputs(
             .ok_or(ExchangeError::InvalidPsbt(
                 "witness_utxo required".to_string(),
             ))?;
-        let pubkey = extract_script(&witness.script_pubkey).ok_or(ExchangeError::InvalidPsbt(
-            format!("unsupported input type: {}", i),
-        ))?;
+        let pubkey_hash = extract_pubkey_hash(&witness.script_pubkey).ok_or(
+            ExchangeError::InvalidPsbt(format!("unsupported input type: {}", i)),
+        )?;
         match input_rune.rune_id {
             Some(rune_id) => {
                 let amount = input_rune
@@ -64,7 +64,7 @@ pub(crate) fn inputs(
                         .try_into()
                         .expect("satoshis amount overflow"),
                 };
-                r.push((utxo, pubkey));
+                r.push((utxo, pubkey_hash));
             }
             None => {
                 let utxo = Utxo {
@@ -79,7 +79,7 @@ pub(crate) fn inputs(
                         .try_into()
                         .expect("satoshis amount overflow"),
                 };
-                r.push((utxo, pubkey));
+                r.push((utxo, pubkey_hash));
             }
         }
     }
@@ -90,7 +90,7 @@ pub(crate) fn outputs(
     txid: Txid,
     psbt: &Psbt,
     output_runes: &[OutputRune],
-) -> Result<Vec<(Utxo, Pubkey)>, ExchangeError> {
+) -> Result<Vec<(Utxo, PubkeyHash)>, ExchangeError> {
     (psbt.unsigned_tx.output.len() == output_runes.len()
         && psbt.outputs.len() == output_runes.len())
     .then(|| ())
@@ -104,8 +104,8 @@ pub(crate) fn outputs(
             continue;
         }
         if tx_out.script_pubkey.is_p2wpkh() {
-            let pubkey = extract_script(&tx_out.script_pubkey);
-            if pubkey.is_none() {
+            let pubkey_hash = extract_pubkey_hash(&tx_out.script_pubkey);
+            if pubkey_hash.is_none() {
                 continue;
             }
             (i < output_runes.len() && i < psbt.outputs.len())
@@ -133,7 +133,7 @@ pub(crate) fn outputs(
                             .try_into()
                             .expect("satoshis amount overflow"),
                     };
-                    r.push((utxo, pubkey.unwrap()));
+                    r.push((utxo, pubkey_hash.unwrap()));
                 }
                 None => {
                     let utxo = Utxo {
@@ -148,10 +148,28 @@ pub(crate) fn outputs(
                             .try_into()
                             .expect("satoshis amount overflow"),
                     };
-                    r.push((utxo, pubkey.unwrap()));
+                    r.push((utxo, pubkey_hash.unwrap()));
                 }
             }
         }
     }
     Ok(r)
+}
+
+#[test]
+pub fn test_extract_pubkey() {
+    use std::str::FromStr;
+    let psbt_hex = "70736274ff0100fd170102000000038d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630300000000ffffffff8d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630400000000ffffffff8d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630200000000ffffffff0500000000000000000d6a5d0a00c0a233ce06acfa72022202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db052202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a5700010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a443a000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000001011fe94b010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086b02473044022100ef9ce94acdf2cc79434aa5b610b682f2eb057010802bc24d66587a45e0b2861f021f43b5ac2c8bc2a44da78ae42e3887b155b414a7f0ce116cd9f6094c92fab5b401210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001011f3413000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db050001011f2202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000000";
+    let psbt_bytes = hex::decode(&psbt_hex).unwrap();
+    let psbt = Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
+    for (i, input) in psbt.inputs.iter().enumerate() {
+        let pubkey_hash = extract_pubkey_hash(&input.witness_utxo.as_ref().unwrap().script_pubkey);
+        if i == 0 {
+            let assert = PubkeyHash::from_str("639985ae746acdfcf3d1e70973bbd42a39690d4a").unwrap();
+            assert_eq!(Some(assert), pubkey_hash);
+        } else {
+            let assert = PubkeyHash::from_str("fdc6db9c64ac369e0453531db338ce7301c6db05").unwrap();
+            assert_eq!(Some(assert), pubkey_hash);
+        }
+    }
 }

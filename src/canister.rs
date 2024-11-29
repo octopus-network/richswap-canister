@@ -150,12 +150,12 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
     let outputs = crate::psbt::outputs(tx_id, &psbt, &output_runes).map_err(|e| e.to_string())?;
     let any_pubkey_of_user = inputs
         .iter()
-        .find(|i| i.1 != pool.pubkey)
+        .find(|i| i.1 != pool.pubkey.pubkey_hash())
         .map(|i| i.1.clone())
         .ok_or("no user pubkey found".to_string())?;
     let total_user_satoshis_input = inputs
         .iter()
-        .filter(|&i| i.1 != pool.pubkey)
+        .filter(|&i| i.1 != pool.pubkey.pubkey_hash())
         .filter(|&i| i.0.balance.id == CoinId::btc())
         .map(|i| i.0.balance)
         .reduce(|a, b| CoinBalance {
@@ -164,7 +164,7 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
         });
     let total_user_rune_input = inputs
         .iter()
-        .filter(|&i| i.1 != pool.pubkey)
+        .filter(|&i| i.1 != pool.pubkey.pubkey_hash())
         .filter(|&i| i.0.balance.id != CoinId::btc())
         .map(|i| i.0.balance)
         .reduce(|a, b| {
@@ -176,13 +176,13 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
         });
     let btc_output = outputs
         .iter()
-        .find(|&o| o.1 == pool.pubkey)
+        .find(|&o| o.1 == pool.pubkey.pubkey_hash())
         .filter(|&o| o.0.balance.id == CoinId::btc())
         .map(|o| o.0.clone())
         .ok_or("no btc output of pool".to_string())?;
     let rune_output = outputs
         .iter()
-        .find(|&o| o.1 == pool.pubkey)
+        .find(|&o| o.1 == pool.pubkey.pubkey_hash())
         .filter(|&o| o.0.balance.id != CoinId::btc())
         .map(|o| o.0.clone())
         .ok_or("no rune output of pool".to_string())?;
@@ -191,7 +191,7 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
         // this indicates rune => btc
         let total_user_rune_output = outputs
             .iter()
-            .filter(|&o| o.1 != pool.pubkey)
+            .filter(|&o| o.1 != pool.pubkey.pubkey_hash())
             .filter(|&o| o.0.balance.id != CoinId::btc())
             .map(|o| o.0.balance)
             .reduce(|a, b| {
@@ -304,8 +304,6 @@ ic_cdk::export_candid!();
 
 #[test]
 pub fn debug_psbt() {
-    use std::str::FromStr;
-    let psbt_hex = "70736274ff0100fd47010200000003a160c837f02001986a6948b943af3361eaf976e94f509f03b30641ad3ecf4da40000000000ffffffff88a188d28ca3529116adebfabb53ae5d122a3319f0c97b848423aaa3d91cbcd80200000000ffffffff813eef858acb1726d52fee6fe319a62ca5d7ea078514f8bea4d974d5c5a8150a0000000000ffffffff0500000000000000000d6a5d0a00c0a233ce0695dd57022202000000000000225120b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe762202000000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce90ccd020000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9983a000000000000225120b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76000000000001012b8813000000000000225120b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76011720b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe760001012b2202000000000000225120b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76011720b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe760001012b400d030000000000225120269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce90108420140a7e635eb04f2c7d16b170e202356126f621368295e42becc32fbdd5214f704dfffa331e14d829a5b7261faa04b55f3379f0dac5ff00a80ccdc4e18364fb9ebdd000000000000";
     let psbt_hex = "70736274ff0100fd1801020000000349be4ee3213f275e720244eb30c6be478e4858b53ea5e554783226d7d0016def0100000000ffffffffa6000363e84f15b0551094e60454206aa6cdbabe982a065030201b1b187a19520000000000ffffffff7fbe48d7e08c8c74f37dbc3bf9e8e8518f98529dd75f3432bde7a00b9e00f5cd0200000000ffffffff0500000000000000000e6a5d0b00c0a233ce0695b58e01022202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a2202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db053119000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a289a010000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000001011ff5b8010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086c02483045022100a8eeaf6364f986bda4d5cd2a913d7abceb5e6041b96c077ac01ed8f68d2e81b702204d098d548f07e94c01a19245e6cf69753cdf9d879563827bc4052c1401dff49a01210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001011f8813000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db050001011f2202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000000";
     let psbt_bytes = hex::decode(&psbt_hex).unwrap();
     let psbt = Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
@@ -321,68 +319,4 @@ pub fn debug_psbt() {
     psbt.unsigned_tx.output.iter().for_each(|output| {
         println!("{:?}\n", output);
     });
-
-    let pool_id =
-        Pubkey::from_str("03b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76")
-            .unwrap();
-    let (mut new_x, mut new_y) = (None::<Utxo>, None::<Utxo>);
-    let mut user_pubkey = Option::<Pubkey>::None;
-    let output_runes = vec![
-        None,
-        Some(CoinId::rune(840001, 431)),
-        Some(CoinId::rune(840001, 431)),
-        None,
-        None,
-    ];
-    for (i, output) in psbt.unsigned_tx.output.iter().enumerate() {
-        if output.script_pubkey.is_op_return() {
-            continue;
-        }
-        if output.script_pubkey.is_p2tr() {
-            match extract_pubkey(&output.script_pubkey) {
-                Some(pubkey) if pubkey == pool_id => {
-                    let output_rune = &output_runes[i];
-                    match output_rune {
-                        Some(rune_id) => {
-                            new_x.replace(Utxo {
-                                txid: Txid::from_str("0a15a8c5d574d9a4bef8148507ead7a52ca619e36fee2fd52617cb8a85ef3e81").unwrap(),
-                                vout: i as u32,
-                                balance: CoinBalance {
-                                    id: *rune_id,
-                                    value: 0,
-                                },
-                                satoshis: 0,
-                            });
-                        }
-                        None => {
-                            new_y.replace(Utxo {
-                                txid: Txid::from_str("0a15a8c5d574d9a4bef8148507ead7a52ca619e36fee2fd52617cb8a85ef3e81").unwrap(),
-                                vout: i as u32,
-                                balance: CoinBalance {
-                                    id: CoinId::btc(),
-                                    value: 0,
-                                },
-                                satoshis: 0,
-                            });
-                        }
-                    }
-                    // TODO replace the utxo
-                }
-                Some(pubkey) => {
-                    user_pubkey.replace(pubkey);
-                    let output_rune = &output_runes[i];
-                    match output_rune {
-                        Some(rune_id) => {}
-                        None => {}
-                    }
-                }
-                None => {}
-            }
-        }
-    }
-    assert!(new_x.is_some());
-    assert!(new_y.is_some());
-    println!("{:?}", new_x);
-    println!("{:?}", new_y);
-    assert!(false);
 }

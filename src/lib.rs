@@ -4,6 +4,7 @@ mod pool;
 mod psbt;
 
 use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_FEE_RATE};
+use bitcoin::PubkeyHash;
 use candid::{
     types::{Serializer, Type, TypeInner},
     CandidType, Deserialize,
@@ -60,6 +61,10 @@ impl Pubkey {
             bitcoin::Network::Bitcoin,
         )
         .to_string()
+    }
+
+    pub fn pubkey_hash(&self) -> PubkeyHash {
+        self.0.pubkey_hash()
     }
 }
 
@@ -606,7 +611,7 @@ pub(crate) async fn create_pool(
 #[test]
 pub fn ser_deser_pubkey() {
     use std::str::FromStr;
-    let pk = Pubkey::from_str("008b9e7248411b06d55cf8b497d204d35af341a00a268aa15f425128e951a095");
+    let pk = Pubkey::from_str("03b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76");
     assert!(pk.is_ok());
 }
 
@@ -626,7 +631,6 @@ pub fn test_derive_p2tr_addr() {
     let address = Address::p2tr(&Secp256k1::new(), x_only_pubkey, None, Network::Bitcoin);
 
     println!("Taproot Address: {}", address);
-    assert!(false);
 }
 
 #[test]
