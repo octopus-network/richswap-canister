@@ -4,7 +4,6 @@ mod pool;
 mod psbt;
 
 use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_FEE_RATE};
-use bitcoin::PubkeyHash;
 use candid::{
     types::{Serializer, Type, TypeInner},
     CandidType, Deserialize,
@@ -45,6 +44,9 @@ pub struct Utxo {
     pub satoshis: u64,
 }
 
+// #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
+// pub struct PubkeyHash(pub(crate) bitcoin::PubkeyHash);
+
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
 pub struct Pubkey(pub(crate) bitcoin::PublicKey);
 
@@ -63,7 +65,7 @@ impl Pubkey {
         .to_string()
     }
 
-    pub fn pubkey_hash(&self) -> PubkeyHash {
+    pub fn pubkey_hash(&self) -> bitcoin::PubkeyHash {
         self.0.pubkey_hash()
     }
 }
@@ -590,17 +592,18 @@ pub(crate) async fn sign_prehash_with_ecdsa(
 }
 
 pub(crate) async fn create_pool(
-    x: CoinMeta,
-    y: CoinMeta,
+    meta: CoinMeta,
+    btc: Utxo,
+    rune: Utxo,
     pubkey: Pubkey,
 ) -> Result<(), ExchangeError> {
-    let base_id = if x.id == CoinId::btc() { y.id } else { x.id };
-    if has_pool(&base_id) {
+    if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
     }
-    let pool = LiquidityPool::new(x, y, *DEFAULT_FEE_RATE, pubkey.clone());
+    let id = meta.id;
+    let pool = LiquidityPool::new(meta, btc, rune, *DEFAULT_FEE_RATE, pubkey.clone());
     POOL_TOKENS.with_borrow_mut(|l| {
-        l.insert(base_id, pubkey.clone());
+        l.insert(id, pubkey.clone());
         POOLS.with_borrow_mut(|p| {
             p.insert(pubkey, pool);
         });

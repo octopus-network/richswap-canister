@@ -1,10 +1,4 @@
 type CoinBalance = record { id : text; value : nat };
-type CoinMeta = record {
-  id : text;
-  decimals : nat8;
-  min_amount : text;
-  symbol : text;
-};
 type ExchangeError = variant {
   InvalidNumeric;
   Overflow;
@@ -29,33 +23,46 @@ type InputRune = record {
   rune_amount : opt nat;
   rune_id : opt text;
 };
-type Output = record { balance : CoinBalance; pubkey : text };
+type InstructionMethod = variant {
+  AddLiquidity : record {
+    inputs : record { CoinBalance; CoinBalance };
+    nonce : nat64;
+    pool_id : text;
+  };
+  Swap : record { nonce : nat64; input : CoinBalance; pool_id : text };
+  CreatePool : record { CoinBalance; CoinBalance };
+};
+type LiquidityOffer = record {
+  output : CoinBalance;
+  inputs : vec Utxo;
+  nonce : nat64;
+};
 type OutputRune = record {
   btc_amount : nat;
   rune_amount : opt nat;
   rune_id : opt text;
 };
-type Result = variant { Ok : text; Err : ExchangeError };
-type Result_1 = variant { Ok; Err : ExchangeError };
+type ReeInstruction = record {
+  method : InstructionMethod;
+  exchange_id : text;
+  output_coin_balance : opt CoinBalance;
+};
+type Result = variant { Ok : LiquidityOffer; Err : ExchangeError };
+type Result_1 = variant { Ok : text; Err : ExchangeError };
 type Result_2 = variant { Ok : SwapOffer; Err : ExchangeError };
 type Result_3 = variant { Ok : text; Err : text };
 type SignPsbtCallingArgs = record {
-  method : text;
   tx_id : text;
-  nonce : nat64;
   input_runes : vec InputRune;
   output_runes : vec OutputRune;
-  pool_id : opt text;
+  instruction : ReeInstruction;
   psbt_hex : text;
 };
 type SwapOffer = record {
+  output : CoinBalance;
+  inputs : vec Utxo;
   nonce : nat64;
-  maker_input : vec Utxo;
-  tx_fee : text;
-  price : text;
-  outputs : vec Output;
 };
-type SwapQuery = record { balance : CoinBalance; pubkey : text };
 type Utxo = record {
   satoshis : nat64;
   balance : CoinBalance;
@@ -63,8 +70,8 @@ type Utxo = record {
   vout : nat32;
 };
 service : {
-  create : (CoinMeta, CoinMeta) -> (Result);
-  mock_add_liquidity : (Utxo, Utxo, text) -> (Result_1);
-  pre_swap : (text, SwapQuery) -> (Result_2) query;
+  pre_add_liquidity : (text, CoinBalance) -> (Result) query;
+  pre_create : (CoinBalance, CoinBalance) -> (Result_1);
+  pre_swap : (text, CoinBalance) -> (Result_2) query;
   sign_psbt : (SignPsbtCallingArgs) -> (Result_3);
 }
