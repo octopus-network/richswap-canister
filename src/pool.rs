@@ -1,18 +1,16 @@
-use crate::{CoinBalance, CoinId, Decimal, ExchangeError, Output, Pubkey, Utxo};
+use crate::{CoinBalance, CoinId, ExchangeError, Pubkey, Utxo};
 use candid::{CandidType, Deserialize};
 use ic_stable_structures::{storable::Bound, Storable};
 use serde::Serialize;
 
-lazy_static::lazy_static! {
-    pub static ref DEFAULT_FEE_RATE: Decimal = Decimal::new(2, 2);
-}
+/// represents 0.9/100 = 9/1_000 = 900/1_000_000
+pub const DEFAULT_FEE_RATE: u128 = 900;
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CoinMeta {
     pub id: CoinId,
     pub symbol: String,
-    pub min_amount: Decimal,
-    pub decimals: u8,
+    pub min_amount: u128,
 }
 
 impl CoinMeta {
@@ -20,8 +18,7 @@ impl CoinMeta {
         Self {
             id: CoinId::btc(),
             symbol: "BTC".to_string(),
-            min_amount: Decimal::new(546, 8),
-            decimals: 8,
+            min_amount: 546,
         }
     }
 }
@@ -32,9 +29,9 @@ pub struct LiquidityPool {
     pub btc_utxo: Utxo,
     pub rune_utxo: Utxo,
     pub meta: CoinMeta,
-    pub incomes: Decimal,
-    pub fee_rate: Decimal,
-    pub k: Decimal,
+    pub incomes: u128,
+    pub fee_rate: u128,
+    pub k: u128,
     pub pubkey: Pubkey,
 }
 
@@ -54,21 +51,34 @@ impl Storable for LiquidityPool {
 }
 
 impl LiquidityPool {
-    pub fn new(meta: CoinMeta, btc: Utxo, rune: Utxo, fee_rate: Decimal, pubkey: Pubkey) -> Self {
-        Self {
+    pub fn new(
+        meta: CoinMeta,
+        btc: Utxo,
+        rune: Utxo,
+        fee_rate: u128,
+        pubkey: Pubkey,
+    ) -> Option<Self> {
+        let k = btc.balance.value.checked_mul(rune.balance.value)?;
+        (fee_rate <= 1_000_000).then(|| ())?;
+        Some(Self {
             nonce: 0,
             btc_utxo: btc,
             rune_utxo: rune,
             meta,
-            incomes: Decimal::zero(),
+            incomes: 0,
             fee_rate,
-            k: Decimal::zero(),
+            k,
             pubkey,
-        }
+        })
     }
 
     pub fn base_id(&self) -> CoinId {
         self.meta.id
+    }
+
+    pub(crate) fn charge_fee(btc: u128, per_millis: u128) -> (u128, u128) {
+        let charge = btc * per_millis / 1_000_000u128;
+        (btc - charge, charge)
     }
 
     pub(crate) fn liquidity_should_add(
@@ -80,17 +90,34 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidPool)?;
         if side.id == btc_meta.id {
-            side.decimal(btc_meta.decimals)
-                .map(|btc| (self.k / btc).truncate(self.meta.decimals))
+            let rune = self
+                .k
+                .checked_div(side.value)
                 .filter(|rune| *rune >= self.meta.min_amount)
-                .map(|rune| CoinBalance::from_decimal(rune, self.meta.decimals, self.meta.id))
-                .ok_or(ExchangeError::TooSmallFunds)
+                .ok_or(ExchangeError::TooSmallFunds)?;
+            let new_btc = side.value + self.btc_utxo.balance.value;
+            rune.checked_add(self.rune_utxo.balance.value)
+                .and_then(|rune| rune.checked_mul(new_btc))
+                .ok_or(ExchangeError::Overflow)?;
+            Ok(CoinBalance {
+                value: rune,
+                id: self.meta.id,
+            })
         } else {
-            side.decimal(self.meta.decimals)
-                .map(|rune| (self.k / rune).truncate(btc_meta.decimals))
+            let btc = self
+                .k
+                .checked_div(side.value)
                 .filter(|btc| *btc >= btc_meta.min_amount)
-                .map(|btc| CoinBalance::from_decimal(btc, btc_meta.decimals, btc_meta.id))
-                .ok_or(ExchangeError::TooSmallFunds)
+                .ok_or(ExchangeError::TooSmallFunds)?;
+            let new_btc = btc + self.btc_utxo.balance.value;
+            side.value
+                .checked_add(self.rune_utxo.balance.value)
+                .and_then(|rune| rune.checked_mul(new_btc))
+                .ok_or(ExchangeError::Overflow)?;
+            Ok(CoinBalance {
+                value: btc,
+                id: btc_meta.id,
+            })
         }
     }
 
@@ -100,63 +127,59 @@ impl LiquidityPool {
     pub(crate) fn available_to_swap(
         &self,
         taker: CoinBalance,
-    ) -> Result<(CoinBalance, Decimal), ExchangeError> {
+    ) -> Result<(CoinBalance, u128), ExchangeError> {
         let btc_meta = CoinMeta::btc();
         (taker.id == self.meta.id || taker.id == CoinId::btc())
             .then(|| ())
             .ok_or(ExchangeError::InvalidPool)?;
-        let btc_supply = self
-            .btc_utxo
-            .balance
-            .decimal(btc_meta.decimals)
-            .ok_or(ExchangeError::InvalidPool)?;
-        let rune_supply = self
-            .rune_utxo
-            .balance
-            .decimal(self.meta.decimals)
-            .ok_or(ExchangeError::InvalidPool)?;
+        let btc_supply = self.btc_utxo.balance.value;
+        let rune_supply = self.rune_utxo.balance.value;
         let (offer, fee) = if taker.id == CoinId::btc() {
             // btc -> rune
-            let taker_amount = taker
-                .decimal(btc_meta.decimals)
-                .ok_or(ExchangeError::InvalidNumeric)?;
-            let charge = (taker_amount * self.fee_rate).truncate(btc_meta.decimals);
-            (charge > Decimal::zero())
+            let (input_amount, charge) = Self::charge_fee(taker.value, self.fee_rate);
+            (charge > 0)
                 .then(|| ())
                 .ok_or(ExchangeError::TooSmallFunds)?;
-            let input_amount = taker_amount - charge;
-            let rune_remains = (self.k / (btc_supply + input_amount)).truncate(self.meta.decimals);
+            let rune_remains = btc_supply
+                .checked_add(input_amount)
+                .and_then(|sum| self.k.checked_div(sum))
+                .ok_or(ExchangeError::InvalidNumeric)?;
             (rune_remains >= self.meta.min_amount)
                 .then(|| ())
                 .ok_or(ExchangeError::EmptyPool)?;
-            let offer = (rune_supply - rune_remains).truncate(self.meta.decimals);
-            (offer > Decimal::zero())
+            let offer = rune_supply - rune_remains;
+            (offer > 0)
                 .then(|| ())
                 .ok_or(ExchangeError::TooSmallFunds)?;
             (
-                CoinBalance::from_decimal(offer, self.meta.decimals, self.meta.id),
+                CoinBalance {
+                    value: offer,
+                    id: self.meta.id,
+                },
                 charge,
             )
         } else {
             // rune -> btc
-            let taker_amount = taker
-                .decimal(self.meta.decimals)
+            let btc_remains = rune_supply
+                .checked_add(taker.value)
+                .and_then(|sum| self.k.checked_div(sum))
                 .ok_or(ExchangeError::InvalidNumeric)?;
-            let btc_remains = (self.k / (rune_supply + taker_amount)).truncate(btc_meta.decimals);
             (btc_remains >= btc_meta.min_amount)
                 .then(|| ())
                 .ok_or(ExchangeError::EmptyPool)?;
-            let pre_charge = (btc_supply - btc_remains).truncate(btc_meta.decimals);
-            let charge = (pre_charge * self.fee_rate).truncate(btc_meta.decimals);
-            (charge > Decimal::zero())
+            let pre_charge = btc_supply - btc_remains;
+            let (offer, charge) = Self::charge_fee(pre_charge, self.fee_rate);
+            (charge > 0)
                 .then(|| ())
                 .ok_or(ExchangeError::TooSmallFunds)?;
-            let offer = pre_charge - charge;
             (offer >= btc_meta.min_amount)
                 .then(|| ())
                 .ok_or(ExchangeError::TooSmallFunds)?;
             (
-                CoinBalance::from_decimal(offer, btc_meta.decimals, btc_meta.id),
+                CoinBalance {
+                    id: btc_meta.id,
+                    value: offer,
+                },
                 charge,
             )
         };

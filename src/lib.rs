@@ -1,5 +1,4 @@
 mod canister;
-mod decimal;
 mod pool;
 mod psbt;
 
@@ -8,7 +7,6 @@ use candid::{
     types::{Serializer, Type, TypeInner},
     CandidType, Deserialize,
 };
-pub use decimal::Decimal;
 use ic_cdk::api::management_canister::{
     ecdsa::{
         self, EcdsaCurve, EcdsaKeyId, EcdsaPublicKeyArgument, SignWithEcdsaArgument,
@@ -43,9 +41,6 @@ pub struct Utxo {
     pub balance: CoinBalance,
     pub satoshis: u64,
 }
-
-// #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
-// pub struct PubkeyHash(pub(crate) bitcoin::PubkeyHash);
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
 pub struct Pubkey(pub(crate) bitcoin::PublicKey);
@@ -393,26 +388,6 @@ pub struct CoinBalance {
     pub value: u128,
 }
 
-impl CoinBalance {
-    pub fn decimal(&self, divisibility: u8) -> Option<Decimal> {
-        let v: i128 = self.value.try_into().ok()?;
-        if v < 0 {
-            None
-        } else {
-            Decimal::try_from_primitive(v, divisibility as u32)
-        }
-    }
-
-    pub fn from_decimal(value: Decimal, divisibility: u8, id: CoinId) -> Self {
-        let mut v = value.truncate(divisibility);
-        v.set_scale(0);
-        Self {
-            id,
-            value: v.mantissa() as u128,
-        }
-    }
-}
-
 #[derive(Debug, Error, CandidType)]
 pub enum ExchangeError {
     #[error("overflow")]
@@ -601,7 +576,8 @@ pub(crate) async fn create_pool(
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
-    let pool = LiquidityPool::new(meta, btc, rune, *DEFAULT_FEE_RATE, pubkey.clone());
+    let pool = LiquidityPool::new(meta, btc, rune, DEFAULT_FEE_RATE, pubkey.clone())
+        .ok_or(ExchangeError::TooSmallFunds)?;
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, pubkey.clone());
         POOLS.with_borrow_mut(|p| {

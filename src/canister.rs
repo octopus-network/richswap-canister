@@ -1,4 +1,4 @@
-use crate::{pool::CoinMeta, CoinBalance, CoinId, Decimal, ExchangeError, Pubkey, Txid, Utxo};
+use crate::{pool::CoinMeta, CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo};
 use bitcoin::psbt::Psbt;
 use candid::{CandidType, Deserialize, Principal};
 use ic_cdk_macros::{init, post_upgrade, pre_upgrade, query, update};
@@ -148,12 +148,11 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 .find(|&o| o.0.balance.id == rune && o.1 == key.pubkey_hash())
                 .map(|o| o.0.clone())
                 .ok_or("no rune output of pool".to_string())?;
-            // TODO remove deps of CoinMeta
+            // TODO fetch CoinMeta from external
             let meta = CoinMeta {
                 id: rune,
                 symbol: "RICH".to_string(),
-                min_amount: Decimal::new(1, 2),
-                decimals: 2,
+                min_amount: 1,
             };
             crate::create_pool(meta, btc_output, rune_output, key)
                 .await
@@ -218,13 +217,8 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 let mut pool = p.expect("already checked in pre_add_liquidity;qed");
                 pool.btc_utxo = btc_output;
                 pool.rune_utxo = rune_output;
-                // TODO remove decimal deps
-                pool.k = pool
-                    .btc_utxo
-                    .balance
-                    .decimal(CoinMeta::btc().decimals)
-                    .unwrap()
-                    * pool.rune_utxo.balance.decimal(pool.meta.decimals).unwrap();
+                // already check overflow in `pre_add_liquidity`
+                pool.k = pool.btc_utxo.balance.value * pool.rune_utxo.balance.value;
                 pool.nonce += 1;
                 Ok(Some(pool))
             })
