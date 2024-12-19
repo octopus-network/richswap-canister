@@ -78,7 +78,7 @@ pub(crate) fn inputs(
                     vout: tx_in.previous_output.vout,
                     balance: CoinBalance {
                         id: CoinId::btc(),
-                        value: input_rune.btc_amount,
+                        value: input_rune.btc_amount as u128,
                     },
                     satoshis: input_rune
                         .btc_amount
@@ -147,7 +147,7 @@ pub(crate) fn outputs(
                         vout: i as u32,
                         balance: CoinBalance {
                             id: CoinId::btc(),
-                            value: output_rune.btc_amount,
+                            value: output_rune.btc_amount as u128,
                         },
                         satoshis: output_rune
                             .btc_amount

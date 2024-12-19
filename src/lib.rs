@@ -479,6 +479,14 @@ where
     })
 }
 
+pub(crate) fn get_pools() -> Vec<LiquidityPool> {
+    POOLS.with_borrow(|p| p.iter().map(|p| p.1.clone()).collect::<Vec<_>>())
+}
+
+pub(crate) fn find_pool(pubkey: &Pubkey) -> Option<LiquidityPool> {
+    with_pool(pubkey, |p| p.clone())
+}
+
 pub(crate) fn reset_all_pools() {
     POOLS.with_borrow_mut(|p| p.clear_new());
     POOL_TOKENS.with_borrow_mut(|p| p.clear_new());

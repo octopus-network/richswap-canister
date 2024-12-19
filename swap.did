@@ -1,4 +1,5 @@
 type CoinBalance = record { id : text; value : nat };
+type CoinMeta = record { id : text; min_amount : nat; symbol : text };
 type ExchangeError = variant {
   InvalidNumeric;
   Overflow;
@@ -19,33 +20,37 @@ type ExchangeError = variant {
 type InputRune = record {
   tx_id : text;
   vout : nat32;
-  btc_amount : nat;
+  btc_amount : nat64;
   rune_amount : opt nat;
   rune_id : opt text;
-};
-type InstructionMethod = variant {
-  AddLiquidity : record {
-    inputs : record { CoinBalance; CoinBalance };
-    nonce : nat64;
-    pool_id : text;
-  };
-  Swap : record { nonce : nat64; input : CoinBalance; pool_id : text };
-  CreatePool : record { CoinBalance; CoinBalance };
 };
 type LiquidityOffer = record {
   output : CoinBalance;
   inputs : vec Utxo;
   nonce : nat64;
 };
+type LiquidityPool = record {
+  k : nat;
+  meta : CoinMeta;
+  btc_utxo : Utxo;
+  incomes : nat;
+  rune_utxo : Utxo;
+  pubkey : text;
+  fee_rate : nat;
+  nonce : nat64;
+};
 type OutputRune = record {
-  btc_amount : nat;
+  btc_amount : nat64;
   rune_amount : opt nat;
   rune_id : opt text;
 };
 type ReeInstruction = record {
-  method : InstructionMethod;
+  method : text;
   exchange_id : text;
-  output_coin_balance : opt CoinBalance;
+  input_coin_balances : vec CoinBalance;
+  output_coin_balances : vec CoinBalance;
+  nonce : opt nat64;
+  pool_id : opt text;
 };
 type Result = variant { Ok : LiquidityOffer; Err : ExchangeError };
 type Result_1 = variant { Ok : text; Err : ExchangeError };
@@ -70,6 +75,8 @@ type Utxo = record {
   vout : nat32;
 };
 service : {
+  find_pool : (text) -> (opt LiquidityPool) query;
+  list_pools : () -> (vec LiquidityPool) query;
   pre_add_liquidity : (text, CoinBalance) -> (Result) query;
   pre_create : (CoinBalance, CoinBalance) -> (Result_1);
   pre_swap : (text, CoinBalance) -> (Result_2) query;

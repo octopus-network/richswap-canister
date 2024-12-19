@@ -1,43 +1,60 @@
-use crate::{pool::CoinMeta, CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo};
+use crate::{
+    pool::{CoinMeta, LiquidityPool},
+    CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo,
+};
 use bitcoin::psbt::Psbt;
-use candid::{CandidType, Deserialize, Principal};
-use ic_cdk_macros::{init, post_upgrade, pre_upgrade, query, update};
+use candid::{CandidType, Deserialize};
+use ic_cdk_macros::{pre_upgrade, query, update};
 use serde::Serialize;
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InputRune {
-    pub tx_id: String,
+    pub tx_id: Txid,
     pub vout: u32,
-    pub btc_amount: u128,
+    pub btc_amount: u64,
     pub rune_id: Option<CoinId>,
     pub rune_amount: Option<u128>,
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct OutputRune {
-    pub btc_amount: u128,
+    pub btc_amount: u64,
     pub rune_id: Option<CoinId>,
     pub rune_amount: Option<u128>,
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub enum InstructionMethod {
-    CreatePool(CoinBalance, CoinBalance),
-    AddLiquidity {
-        pool_id: Pubkey,
-        nonce: u64,
-        inputs: (CoinBalance, CoinBalance),
-    },
-    Swap {
-        pool_id: Pubkey,
-        nonce: u64,
-        input: CoinBalance,
-    },
+pub struct ReeInstruction {
+    pub exchange_id: String,
+    pub method: String,
+    pub pool_id: Option<Pubkey>,
+    pub nonce: Option<u64>,
+    pub input_coin_balances: Vec<CoinBalance>,
+    pub output_coin_balances: Vec<CoinBalance>,
+}
+
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SignPsbtCallingArgs {
+    pub psbt_hex: String,
+    pub tx_id: Txid,
+    pub instruction: ReeInstruction,
+    pub input_runes: Vec<InputRune>,
+    pub output_runes: Vec<OutputRune>,
 }
 
 #[pre_upgrade]
 pub fn init() {
     crate::reset_all_pools();
+}
+
+#[query]
+pub fn list_pools() -> Vec<LiquidityPool> {
+    crate::get_pools()
+}
+
+#[query]
+pub fn find_pool(pool_id: Pubkey) -> Option<LiquidityPool> {
+    crate::find_pool(&pool_id)
 }
 
 // TODO
@@ -104,22 +121,6 @@ pub fn pre_swap(id: Pubkey, input: CoinBalance) -> Result<SwapOffer, ExchangeErr
     })
 }
 
-#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ReeInstruction {
-    pub exchange_id: String,
-    pub method: InstructionMethod,
-    pub output_coin_balance: Option<CoinBalance>,
-}
-
-#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct SignPsbtCallingArgs {
-    pub psbt_hex: String,
-    pub tx_id: Txid,
-    pub instruction: ReeInstruction,
-    pub input_runes: Vec<InputRune>,
-    pub output_runes: Vec<OutputRune>,
-}
-
 // TODO only called by orchestrator
 #[update]
 pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
@@ -132,8 +133,13 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
     } = args;
     let raw = hex::decode(&psbt_hex).map_err(|_| "invalid psbt".to_string())?;
     let mut psbt = Psbt::deserialize(raw.as_slice()).map_err(|_| "invalid psbt".to_string())?;
-    match instruction.method {
-        InstructionMethod::CreatePool(x, y) => {
+    match instruction.method.as_ref() {
+        "create_pool" => {
+            (instruction.input_coin_balances.len() == 2)
+                .then(|| ())
+                .ok_or("invalid input_coin_balances".to_string())?;
+            let x = instruction.input_coin_balances[0].clone();
+            let y = instruction.input_coin_balances[1].clone();
             let key = pre_create(x, y).await.map_err(|e| e.to_string())?;
             let rune = if x.id == CoinId::btc() { y.id } else { x.id };
             let outputs =
@@ -158,11 +164,14 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        InstructionMethod::AddLiquidity {
-            pool_id,
-            nonce,
-            inputs: (x, y),
-        } => {
+        "add_liquidity" => {
+            (instruction.input_coin_balances.len() == 2)
+                .then(|| ())
+                .ok_or("invalid input_coin_balances".to_string())?;
+            let x = instruction.input_coin_balances[0].clone();
+            let y = instruction.input_coin_balances[1].clone();
+            let pool_id = instruction.pool_id.ok_or("pool_id required".to_string())?;
+            let nonce = instruction.nonce.ok_or("nonce required".to_string())?;
             let offer = pre_add_liquidity(pool_id.clone(), x).map_err(|e| e.to_string())?;
             (offer.nonce == nonce)
                 .then(|| ())
@@ -224,16 +233,17 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             })
             .map_err(|e| e.to_string())?;
         }
-        InstructionMethod::Swap {
-            pool_id,
-            nonce,
-            input,
-        } => {
+        "swap" => {
+            (!instruction.input_coin_balances.is_empty())
+                .then(|| ())
+                .ok_or("invalid input_coin_balances".to_string())?;
+            let input = instruction.input_coin_balances[0].clone();
+            let pool_id = instruction.pool_id.ok_or("pool_id required".to_string())?;
+            let nonce = instruction.nonce.ok_or("nonce required".to_string())?;
             let offer = pre_swap(pool_id.clone(), input).map_err(|e| e.to_string())?;
             (offer.nonce == nonce)
                 .then(|| ())
                 .ok_or("pool state expired".to_string())?;
-
             let pool = crate::with_pool(&pool_id, |p| {
                 p.as_ref().expect("already checked;qed").clone()
             });
@@ -290,6 +300,9 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 Ok(Some(pool))
             })
             .map_err(|e| e.to_string())?;
+        }
+        _ => {
+            return Err("invalid method".to_string());
         }
     }
     Ok(psbt.serialize_hex())
