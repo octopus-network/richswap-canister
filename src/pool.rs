@@ -90,9 +90,10 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidPool)?;
         if side.id == btc_meta.id {
-            let rune = self
-                .k
-                .checked_div(side.value)
+            let rune = side
+                .value
+                .checked_mul(self.rune_utxo.balance.value)
+                .and_then(|k| k.checked_div(self.btc_utxo.balance.value))
                 .filter(|rune| *rune >= self.meta.min_amount)
                 .ok_or(ExchangeError::TooSmallFunds)?;
             let new_btc = side.value + self.btc_utxo.balance.value;
@@ -104,9 +105,10 @@ impl LiquidityPool {
                 id: self.meta.id,
             })
         } else {
-            let btc = self
-                .k
-                .checked_div(side.value)
+            let btc = side
+                .value
+                .checked_mul(self.btc_utxo.balance.value)
+                .and_then(|k| k.checked_div(self.rune_utxo.balance.value))
                 .filter(|btc| *btc >= btc_meta.min_amount)
                 .ok_or(ExchangeError::TooSmallFunds)?;
             let new_btc = btc + self.btc_utxo.balance.value;
