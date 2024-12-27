@@ -1,6 +1,7 @@
 mod canister;
 mod pool;
 mod psbt;
+//mod state;
 
 use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_FEE_RATE};
 use candid::{
@@ -621,4 +622,17 @@ pub fn test_derive_p2tr_addr() {
 }
 
 #[test]
-pub fn test_derive_p2wpkh_addr() {}
+pub fn test_derive_p2wpkh_addr() {
+    use bitcoin::Address;
+    use bitcoin::CompressedPublicKey;
+    use bitcoin::Network;
+
+    let pubkey_hex = "021774b3f1c2d9f8e51529eda4a54624e2f067826b42281fb5b9a9b40fd4a967e9";
+    let pubkey_bytes = hex::decode(pubkey_hex).expect("Invalid hex");
+
+    let pubkey = CompressedPublicKey::from_slice(&pubkey_bytes).expect("Invalid pubkey");
+    let address = Address::p2wpkh(&pubkey, Network::Bitcoin);
+
+    println!("Segwit Address: {}", address);
+    assert!(false);
+}

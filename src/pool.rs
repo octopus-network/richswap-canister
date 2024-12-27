@@ -28,10 +28,10 @@ pub struct LiquidityPool {
     pub nonce: u64,
     pub btc_utxo: Utxo,
     pub rune_utxo: Utxo,
-    pub meta: CoinMeta,
     pub incomes: u128,
     pub fee_rate: u128,
     pub k: u128,
+    pub meta: CoinMeta,
     pub pubkey: Pubkey,
 }
 

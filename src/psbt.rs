@@ -30,7 +30,7 @@ pub(crate) fn extract_pubkey_hash(script: &Script) -> Option<PubkeyHash> {
 pub(crate) fn inputs(
     psbt: &Psbt,
     input_runes: &[InputRune],
-) -> Result<Vec<(Utxo, PubkeyHash)>, ExchangeError> {
+) -> Result<Vec<(Utxo, Option<PubkeyHash>)>, ExchangeError> {
     (psbt.unsigned_tx.input.len() == input_runes.len() && psbt.inputs.len() == input_runes.len())
         .then(|| ())
         .ok_or(ExchangeError::InvalidPsbt("inputs not enough".to_string()))?;
@@ -47,9 +47,7 @@ pub(crate) fn inputs(
             .ok_or(ExchangeError::InvalidPsbt(
                 "witness_utxo required".to_string(),
             ))?;
-        let pubkey_hash = extract_pubkey_hash(&witness.script_pubkey).ok_or(
-            ExchangeError::InvalidPsbt(format!("unsupported input type: {}", i)),
-        )?;
+        let pubkey_hash = extract_pubkey_hash(&witness.script_pubkey);
         match input_rune.rune_id {
             Some(rune_id) => {
                 let amount = input_rune

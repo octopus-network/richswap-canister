@@ -77,6 +77,7 @@ type Utxo = record {
 service : {
   find_pool : (text) -> (opt LiquidityPool) query;
   list_pools : () -> (vec LiquidityPool) query;
+  manually_transfer : (text, nat32, nat64) -> (opt text);
   pre_add_liquidity : (text, CoinBalance) -> (Result) query;
   pre_create : (CoinBalance, CoinBalance) -> (Result_1);
   pre_swap : (text, CoinBalance) -> (Result_2) query;

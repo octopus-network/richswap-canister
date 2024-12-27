@@ -1,10 +1,12 @@
+use std::str::FromStr;
+
 use crate::{
     pool::{CoinMeta, LiquidityPool},
     CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo,
 };
 use bitcoin::psbt::Psbt;
 use candid::{CandidType, Deserialize};
-use ic_cdk_macros::{pre_upgrade, query, update};
+use ic_cdk_macros::{post_upgrade, pre_upgrade, query, update};
 use serde::Serialize;
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -42,10 +44,13 @@ pub struct SignPsbtCallingArgs {
     pub output_runes: Vec<OutputRune>,
 }
 
-#[pre_upgrade]
-pub fn init() {
+#[post_upgrade]
+pub fn re_init() {
     crate::reset_all_pools();
 }
+
+#[pre_upgrade]
+pub fn re_init0() {}
 
 #[query]
 pub fn list_pools() -> Vec<LiquidityPool> {
@@ -190,12 +195,12 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             let inputs = crate::psbt::inputs(&psbt, &input_runes).map_err(|e| e.to_string())?;
             let btc_input = inputs
                 .iter()
-                .find(|&i| i.0 == pool.btc_utxo && i.1 == pool.pubkey.pubkey_hash())
+                .find(|&i| i.0 == pool.btc_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
                 .map(|i| i.0.clone())
                 .ok_or("no btc input of pool".to_string())?;
             let rune_input = inputs
                 .iter()
-                .find(|&i| i.0 == pool.rune_utxo && i.1 == pool.pubkey.pubkey_hash())
+                .find(|&i| i.0 == pool.rune_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
                 .map(|i| i.0.clone())
                 .ok_or("no rune input of pool".to_string())?;
             let outputs =
@@ -240,22 +245,22 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             let input = instruction.input_coin_balances[0].clone();
             let pool_id = instruction.pool_id.ok_or("pool_id required".to_string())?;
             let nonce = instruction.nonce.ok_or("nonce required".to_string())?;
-            let offer = pre_swap(pool_id.clone(), input).map_err(|e| e.to_string())?;
-            (offer.nonce == nonce)
-                .then(|| ())
-                .ok_or("pool state expired".to_string())?;
             let pool = crate::with_pool(&pool_id, |p| {
                 p.as_ref().expect("already checked;qed").clone()
             });
+            let (offer, _) = pool.available_to_swap(input).map_err(|e| e.to_string())?;
+            (pool.nonce == nonce)
+                .then(|| ())
+                .ok_or("pool state expired".to_string())?;
             let inputs = crate::psbt::inputs(&psbt, &input_runes).map_err(|e| e.to_string())?;
             let btc_input = inputs
                 .iter()
-                .find(|&i| i.0 == pool.btc_utxo && i.1 == pool.pubkey.pubkey_hash())
+                .find(|&i| i.0 == pool.btc_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
                 .map(|i| i.0.clone())
                 .ok_or("no btc input of pool".to_string())?;
             let rune_input = inputs
                 .iter()
-                .find(|&i| i.0 == pool.rune_utxo && i.1 == pool.pubkey.pubkey_hash())
+                .find(|&i| i.0 == pool.rune_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
                 .map(|i| i.0.clone())
                 .ok_or("no rune input of pool".to_string())?;
             let outputs =
@@ -274,20 +279,22 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 .ok_or("no rune output of pool".to_string())?;
             if input.id == CoinId::btc() {
                 // pool - rune, + btc
+                // TODO fee
                 (btc_input.balance.value + input.value == btc_output.balance.value)
                     .then(|| ())
                     .ok_or("btc input/output mismatch".to_string())?;
-                (rune_input.balance.value - input.value == rune_output.balance.value)
+                (rune_input.balance.value - offer.value == rune_output.balance.value)
                     .then(|| ())
                     .ok_or("rune input/output mismatch".to_string())?;
             } else {
                 // pool + rune, - btc
-                (btc_input.balance.value - input.value == btc_output.balance.value)
-                    .then(|| ())
-                    .ok_or("btc input/output mismatch".to_string())?;
                 (rune_input.balance.value + input.value == rune_output.balance.value)
                     .then(|| ())
                     .ok_or("rune input/output mismatch".to_string())?;
+                // TODO fee
+                (btc_input.balance.value - offer.value == btc_output.balance.value)
+                    .then(|| ())
+                    .ok_or("btc input/output mismatch".to_string())?;
             }
             crate::psbt::sign(&mut psbt, &pool)
                 .await
@@ -306,6 +313,71 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
         }
     }
     Ok(psbt.serialize_hex())
+}
+
+#[update]
+pub async fn manually_transfer(txid: Txid, vout: u32, satoshis: u64) -> Option<String> {
+    let mut inputs = vec![];
+    inputs.push(bitcoin::TxIn {
+        previous_output: bitcoin::OutPoint {
+            txid: txid.into(),
+            vout,
+        },
+        script_sig: bitcoin::ScriptBuf::new(),
+        sequence: bitcoin::Sequence(0xffffffff),
+        witness: bitcoin::Witness::new(),
+    });
+    let sender_pubkey = bitcoin::PublicKey::from_str(
+        "021774b3f1c2d9f8e51529eda4a54624e2f067826b42281fb5b9a9b40fd4a967e9",
+    )
+    .unwrap();
+
+    let rev_pubkey = bitcoin::PublicKey::from_str(
+        "0294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a",
+    )
+    .unwrap();
+    let mut outputs = vec![];
+    let all = bitcoin::Amount::from_sat(satoshis - 350);
+    outputs.push(bitcoin::TxOut {
+        value: all,
+        script_pubkey: bitcoin::ScriptBuf::new_p2wpkh(&rev_pubkey.wpubkey_hash().ok()?),
+    });
+
+    let mut unsigned = bitcoin::Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: inputs,
+        output: outputs,
+    };
+    let sighash_type = bitcoin::sighash::EcdsaSighashType::All;
+    let mut sighasher = bitcoin::sighash::SighashCache::new(&mut unsigned);
+    let sighash = sighasher
+        .p2wpkh_signature_hash(
+            0,
+            &bitcoin::ScriptBuf::new_p2wpkh(&sender_pubkey.wpubkey_hash().ok()?),
+            bitcoin::Amount::from_sat(satoshis),
+            sighash_type,
+        )
+        .expect("failed to create sighash");
+    let pool_id = CoinId::rune(840000, 846);
+    let raw_signature =
+        crate::sign_prehash_with_ecdsa(&sighash, "key_1".to_string(), pool_id.to_bytes())
+            .await
+            .ok()?;
+    let signature = bitcoin::ecdsa::Signature {
+        signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&raw_signature)
+            .expect("assert: chain-key signature is 64-bytes compact format"),
+        sighash_type,
+    };
+    *sighasher.witness_mut(0).unwrap() = bitcoin::Witness::p2wpkh(
+        &signature,
+        &bitcoin::secp256k1::PublicKey::from_slice(&sender_pubkey.to_bytes())
+            .expect("assert: pool pubkey is generated by ICP"),
+    );
+    let tx = sighasher.into_transaction();
+
+    let tx = bitcoin::consensus::encode::serialize(&tx);
+    Some(hex::encode(tx))
 }
 
 fn ensure_owner() -> Result<(), String> {
