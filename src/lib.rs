@@ -1,7 +1,6 @@
 mod canister;
 mod pool;
 mod psbt;
-//mod state;
 
 use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_FEE_RATE};
 use candid::{
@@ -421,6 +420,8 @@ pub enum ExchangeError {
     ChainKeyError,
     #[error("invalid psbt: {0}")]
     InvalidPsbt(String),
+    #[error("invalid pool state: {0}")]
+    InvalidState(String),
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;

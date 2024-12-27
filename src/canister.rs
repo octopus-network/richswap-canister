@@ -44,13 +44,22 @@ pub struct SignPsbtCallingArgs {
     pub output_runes: Vec<OutputRune>,
 }
 
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct FinalizeTxArgs {
+    pub pool_id: Pubkey,
+    pub tx_id: Txid,
+}
+
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RollbackTxArgs {
+    pub pool_id: Pubkey,
+    pub tx_id: Txid,
+}
+
 #[post_upgrade]
 pub fn re_init() {
     crate::reset_all_pools();
 }
-
-#[pre_upgrade]
-pub fn re_init0() {}
 
 #[query]
 pub fn list_pools() -> Vec<LiquidityPool> {
@@ -93,13 +102,14 @@ pub fn pre_add_liquidity(
 ) -> Result<LiquidityOffer, ExchangeError> {
     crate::with_pool(&pool_id, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let btc = pool.btc_utxo.clone();
-        let rune = pool.rune_utxo.clone();
         let another = pool.liquidity_should_add(side)?;
+        let state = pool.states.last().expect("already checked");
+        let btc = state.btc_utxo.clone();
+        let rune = state.rune_utxo.clone();
         Ok(LiquidityOffer {
             inputs: vec![btc, rune],
             output: another,
-            nonce: pool.nonce,
+            nonce: state.nonce,
         })
     })
 }
@@ -115,15 +125,42 @@ pub struct SwapOffer {
 pub fn pre_swap(id: Pubkey, input: CoinBalance) -> Result<SwapOffer, ExchangeError> {
     crate::with_pool(&id, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let btc = pool.btc_utxo.clone();
-        let rune = pool.rune_utxo.clone();
+        let recent_state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
         let (offer, _) = pool.available_to_swap(input)?;
+        let btc = recent_state.btc_utxo.clone();
+        let rune = recent_state.rune_utxo.clone();
         Ok(SwapOffer {
             inputs: vec![btc, rune],
             output: offer,
-            nonce: pool.nonce,
+            nonce: recent_state.nonce,
         })
     })
+}
+
+// TODO only called by orchestrator
+#[update]
+pub fn rollback(args: RollbackTxArgs) -> Result<(), String> {
+    crate::with_pool_mut(&args.pool_id, |p| {
+        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+        pool.rollback(args.tx_id)?;
+        if pool.states.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(pool))
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
+// TODO only called by orchestrator
+#[update]
+pub fn finalize(args: FinalizeTxArgs) -> Result<(), String> {
+    crate::with_pool_mut(&args.pool_id, |p| {
+        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+        pool.finalize(args.tx_id)?;
+        Ok(Some(pool))
+    })
+    .map_err(|e| e.to_string())
 }
 
 // TODO only called by orchestrator
@@ -192,15 +229,16 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             let pool = crate::with_pool(&pool_id, |p| {
                 p.as_ref().expect("already checked;qed").clone()
             });
+            let mut state = pool.states.last().expect("already checked;qed").clone();
             let inputs = crate::psbt::inputs(&psbt, &input_runes).map_err(|e| e.to_string())?;
             let btc_input = inputs
                 .iter()
-                .find(|&i| i.0 == pool.btc_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
+                .find(|&i| i.0 == state.btc_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
                 .map(|i| i.0.clone())
                 .ok_or("no btc input of pool".to_string())?;
             let rune_input = inputs
                 .iter()
-                .find(|&i| i.0 == pool.rune_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
+                .find(|&i| i.0 == state.rune_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
                 .map(|i| i.0.clone())
                 .ok_or("no rune input of pool".to_string())?;
             let outputs =
@@ -229,11 +267,13 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 .map_err(|e| e.to_string())?;
             crate::with_pool_mut(&pool_id, |p| {
                 let mut pool = p.expect("already checked in pre_add_liquidity;qed");
-                pool.btc_utxo = btc_output;
-                pool.rune_utxo = rune_output;
+                state.btc_utxo = btc_output;
+                state.rune_utxo = rune_output;
                 // already check overflow in `pre_add_liquidity`
-                pool.k = pool.btc_utxo.balance.value * pool.rune_utxo.balance.value;
-                pool.nonce += 1;
+                state.k = state.btc_utxo.balance.value * state.rune_utxo.balance.value;
+                state.nonce += 1;
+                state.txid = tx_id;
+                pool.commit(state);
                 Ok(Some(pool))
             })
             .map_err(|e| e.to_string())?;
@@ -248,19 +288,20 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             let pool = crate::with_pool(&pool_id, |p| {
                 p.as_ref().expect("already checked;qed").clone()
             });
+            let mut state = pool.states.last().expect("already checked;qed").clone();
             let (offer, _) = pool.available_to_swap(input).map_err(|e| e.to_string())?;
-            (pool.nonce == nonce)
+            (state.nonce == nonce)
                 .then(|| ())
                 .ok_or("pool state expired".to_string())?;
             let inputs = crate::psbt::inputs(&psbt, &input_runes).map_err(|e| e.to_string())?;
             let btc_input = inputs
                 .iter()
-                .find(|&i| i.0 == pool.btc_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
+                .find(|&i| i.0 == state.btc_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
                 .map(|i| i.0.clone())
                 .ok_or("no btc input of pool".to_string())?;
             let rune_input = inputs
                 .iter()
-                .find(|&i| i.0 == pool.rune_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
+                .find(|&i| i.0 == state.rune_utxo && i.1 == Some(pool.pubkey.pubkey_hash()))
                 .map(|i| i.0.clone())
                 .ok_or("no rune input of pool".to_string())?;
             let outputs =
@@ -301,9 +342,10 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 .map_err(|e| e.to_string())?;
             crate::with_pool_mut(&pool_id, |p| {
                 let mut pool = p.expect("already checked in pre_swap;qed");
-                pool.btc_utxo = btc_output;
-                pool.rune_utxo = rune_output;
-                pool.nonce += 1;
+                state.btc_utxo = btc_output;
+                state.rune_utxo = rune_output;
+                state.nonce += 1;
+                pool.commit(state);
                 Ok(Some(pool))
             })
             .map_err(|e| e.to_string())?;

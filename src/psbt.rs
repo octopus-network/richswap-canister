@@ -170,7 +170,8 @@ fn cmp_and_clone(mine: &[Utxo], outpoint: &OutPoint) -> Option<Utxo> {
 }
 
 pub(crate) async fn sign(psbt: &mut Psbt, pool: &LiquidityPool) -> Result<(), String> {
-    let utxos = [pool.btc_utxo.clone(), pool.rune_utxo.clone()];
+    let state = pool.states.last().ok_or("EmptyPool".to_string())?;
+    let utxos = [state.btc_utxo.clone(), state.rune_utxo.clone()];
     let mut cache = SighashCache::new(&psbt.unsigned_tx);
     for (i, input) in psbt.unsigned_tx.input.iter().enumerate() {
         let outpoint = &input.previous_output;
