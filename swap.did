@@ -83,13 +83,13 @@ type Utxo = record {
   vout : nat32;
 };
 service : {
-  finalize : (FinalizeTxArgs) -> (Result);
+  finalize_tx : (FinalizeTxArgs) -> (Result);
   find_pool : (text) -> (opt LiquidityPoolWithState) query;
   list_pools : () -> (vec PoolMeta) query;
   manually_transfer : (text, nat32, nat64) -> (opt text);
   pre_add_liquidity : (text, CoinBalance) -> (Result_1) query;
   pre_create : (CoinBalance, CoinBalance) -> (Result_2);
   pre_swap : (text, CoinBalance) -> (Result_3) query;
-  rollback : (FinalizeTxArgs) -> (Result);
+  rollback_tx : (FinalizeTxArgs) -> (Result);
   sign_psbt : (SignPsbtCallingArgs) -> (Result_4);
 }

@@ -162,7 +162,7 @@ pub fn pre_swap(id: Pubkey, input: CoinBalance) -> Result<SwapOffer, ExchangeErr
 
 // TODO only called by orchestrator
 #[update]
-pub fn rollback(args: RollbackTxArgs) -> Result<(), String> {
+pub fn rollback_tx(args: RollbackTxArgs) -> Result<(), String> {
     crate::with_pool_mut(&args.pool_id, |p| {
         let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
         pool.rollback(args.tx_id)?;
@@ -173,7 +173,7 @@ pub fn rollback(args: RollbackTxArgs) -> Result<(), String> {
 
 // TODO only called by orchestrator
 #[update]
-pub fn finalize(args: FinalizeTxArgs) -> Result<(), String> {
+pub fn finalize_tx(args: FinalizeTxArgs) -> Result<(), String> {
     crate::with_pool_mut(&args.pool_id, |p| {
         let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
         pool.finalize(args.tx_id)?;
