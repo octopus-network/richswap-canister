@@ -1,13 +1,12 @@
-use std::str::FromStr;
-
 use crate::{
-    pool::{CoinMeta, LiquidityPool},
+    pool::{CoinMeta, LiquidityPoolWithState, PoolState},
     CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo,
 };
 use bitcoin::psbt::Psbt;
 use candid::{CandidType, Deserialize};
-use ic_cdk_macros::{post_upgrade, pre_upgrade, query, update};
+use ic_cdk_macros::{post_upgrade, query, update};
 use serde::Serialize;
+use std::str::FromStr;
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InputRune {
@@ -56,22 +55,31 @@ pub struct RollbackTxArgs {
     pub tx_id: Txid,
 }
 
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PoolMeta {
+    pub id: Pubkey,
+}
+
 #[post_upgrade]
 pub fn re_init() {
     crate::reset_all_pools();
 }
 
 #[query]
-pub fn list_pools() -> Vec<LiquidityPool> {
+pub fn list_pools() -> Vec<PoolMeta> {
     crate::get_pools()
+        .iter()
+        .map(|p| PoolMeta {
+            id: p.pubkey.clone(),
+        })
+        .collect()
 }
 
 #[query]
-pub fn find_pool(pool_id: Pubkey) -> Option<LiquidityPool> {
-    crate::find_pool(&pool_id)
+pub fn find_pool(pool_id: Pubkey) -> Option<LiquidityPoolWithState> {
+    crate::find_pool(&pool_id).map(|p| p.into())
 }
 
-// TODO
 #[update]
 pub async fn pre_create(x: CoinBalance, y: CoinBalance) -> Result<Pubkey, ExchangeError> {
     (x.id != y.id)
@@ -81,11 +89,26 @@ pub async fn pre_create(x: CoinBalance, y: CoinBalance) -> Result<Pubkey, Exchan
         .then(|| ())
         .ok_or(ExchangeError::BtcRequired)?;
     let rune_id = if x.id == CoinId::btc() { y.id } else { x.id };
-    (!crate::has_pool(&rune_id))
-        .then(|| ())
-        .ok_or(ExchangeError::PoolAlreadyExists)?;
-    let key = crate::request_ecdsa_key("key_1".to_string(), rune_id.to_bytes()).await?;
-    Ok(key)
+    match crate::with_pool_name(&rune_id) {
+        Some(pubkey) => crate::with_pool(&pubkey, |pool| {
+            pool.as_ref()
+                .filter(|p| p.states.is_empty())
+                .map(|p| p.pubkey.clone())
+                .ok_or(ExchangeError::PoolAlreadyExists)
+        }),
+        None => {
+            let key = crate::request_ecdsa_key("key_1".to_string(), rune_id.to_bytes()).await?;
+            let rune = if x.id == CoinId::btc() { y.id } else { x.id };
+            // TODO fetch CoinMeta from external
+            let meta = CoinMeta {
+                id: rune,
+                symbol: "RICH".to_string(),
+                min_amount: 1,
+            };
+            crate::create_empty_pool(meta, key.clone())?;
+            Ok(key)
+        }
+    }
 }
 
 #[derive(Eq, PartialEq, CandidType, Clone, Debug, Deserialize, Serialize)]
@@ -143,11 +166,7 @@ pub fn rollback(args: RollbackTxArgs) -> Result<(), String> {
     crate::with_pool_mut(&args.pool_id, |p| {
         let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
         pool.rollback(args.tx_id)?;
-        if pool.states.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(pool))
-        }
+        Ok(Some(pool))
     })
     .map_err(|e| e.to_string())
 }
@@ -196,15 +215,25 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 .find(|&o| o.0.balance.id == rune && o.1 == key.pubkey_hash())
                 .map(|o| o.0.clone())
                 .ok_or("no rune output of pool".to_string())?;
-            // TODO fetch CoinMeta from external
-            let meta = CoinMeta {
-                id: rune,
-                symbol: "RICH".to_string(),
-                min_amount: 1,
-            };
-            crate::create_pool(meta, btc_output, rune_output, key)
-                .await
-                .map_err(|e| e.to_string())?;
+            crate::with_pool_mut(&key, |p| {
+                let mut pool = p.expect("already checked in pre_create;qed");
+                let k = btc_output
+                    .balance
+                    .value
+                    .checked_mul(rune_output.balance.value)
+                    .ok_or(ExchangeError::Overflow)?;
+                let state = PoolState {
+                    txid: btc_output.txid.clone(),
+                    nonce: 1,
+                    btc_utxo: btc_output,
+                    rune_utxo: rune_output,
+                    incomes: 0,
+                    k,
+                };
+                pool.commit(state);
+                Ok(Some(pool))
+            })
+            .map_err(|e| e.to_string())?;
         }
         "add_liquidity" => {
             (instruction.input_coin_balances.len() == 2)
@@ -429,22 +458,3 @@ fn ensure_owner() -> Result<(), String> {
 }
 
 ic_cdk::export_candid!();
-
-#[test]
-pub fn debug_psbt() {
-    let psbt_hex = "70736274ff0100fd1801020000000349be4ee3213f275e720244eb30c6be478e4858b53ea5e554783226d7d0016def0100000000ffffffffa6000363e84f15b0551094e60454206aa6cdbabe982a065030201b1b187a19520000000000ffffffff7fbe48d7e08c8c74f37dbc3bf9e8e8518f98529dd75f3432bde7a00b9e00f5cd0200000000ffffffff0500000000000000000e6a5d0b00c0a233ce0695b58e01022202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a2202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db053119000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a289a010000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000001011ff5b8010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086c02483045022100a8eeaf6364f986bda4d5cd2a913d7abceb5e6041b96c077ac01ed8f68d2e81b702204d098d548f07e94c01a19245e6cf69753cdf9d879563827bc4052c1401dff49a01210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001011f8813000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db050001011f2202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000000";
-    let psbt_bytes = hex::decode(&psbt_hex).unwrap();
-    let psbt = Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
-    psbt.inputs.iter().for_each(|input| {
-        println!("{:?}\n", input);
-    });
-    psbt.unsigned_tx.input.iter().for_each(|output| {
-        println!("{:?}\n", output);
-    });
-    psbt.outputs.iter().for_each(|output| {
-        println!("{:?}\n", output);
-    });
-    psbt.unsigned_tx.output.iter().for_each(|output| {
-        println!("{:?}\n", output);
-    });
-}

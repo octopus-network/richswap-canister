@@ -24,11 +24,31 @@ impl CoinMeta {
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LiquidityPoolWithState {
+    pub fee_rate: u128,
+    pub meta: CoinMeta,
+    pub pubkey: Pubkey,
+    pub state: Option<PoolState>,
+}
+
+#[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LiquidityPool {
     pub states: Vec<PoolState>,
     pub fee_rate: u128,
     pub meta: CoinMeta,
     pub pubkey: Pubkey,
+}
+
+impl Into<LiquidityPoolWithState> for LiquidityPool {
+    fn into(self) -> LiquidityPoolWithState {
+        let state = self.states.last().cloned();
+        LiquidityPoolWithState {
+            fee_rate: self.fee_rate,
+            meta: self.meta,
+            pubkey: self.pubkey,
+            state,
+        }
+    }
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -72,26 +92,12 @@ impl Storable for PoolState {
 }
 
 impl LiquidityPool {
-    pub fn new(
-        meta: CoinMeta,
-        btc: Utxo,
-        rune: Utxo,
-        fee_rate: u128,
-        pubkey: Pubkey,
-    ) -> Option<Self> {
-        let k = btc.balance.value.checked_mul(rune.balance.value)?;
+    pub fn new_empty(meta: CoinMeta, fee_rate: u128, pubkey: Pubkey) -> Option<Self> {
         (fee_rate <= 1_000_000).then(|| ())?;
         Some(Self {
-            states: vec![PoolState {
-                txid: btc.txid.clone(),
-                nonce: 0,
-                btc_utxo: btc,
-                rune_utxo: rune,
-                incomes: 0,
-                k,
-            }],
-            meta,
+            states: vec![],
             fee_rate,
+            meta,
             pubkey,
         })
     }

@@ -498,6 +498,10 @@ pub(crate) fn has_pool(id: &CoinId) -> bool {
     POOL_TOKENS.with_borrow(|p| p.contains_key(&id))
 }
 
+pub(crate) fn with_pool_name(id: &CoinId) -> Option<Pubkey> {
+    POOL_TOKENS.with_borrow(|p| p.get(&id))
+}
+
 pub(crate) async fn request_schnorr_key(
     key_name: String,
     path: Vec<u8>,
@@ -576,18 +580,13 @@ pub(crate) async fn sign_prehash_with_ecdsa(
     Ok(sig.signature)
 }
 
-pub(crate) async fn create_pool(
-    meta: CoinMeta,
-    btc: Utxo,
-    rune: Utxo,
-    pubkey: Pubkey,
-) -> Result<(), ExchangeError> {
+pub(crate) fn create_empty_pool(meta: CoinMeta, pubkey: Pubkey) -> Result<(), ExchangeError> {
     if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
-    let pool = LiquidityPool::new(meta, btc, rune, DEFAULT_FEE_RATE, pubkey.clone())
-        .ok_or(ExchangeError::TooSmallFunds)?;
+    let pool = LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, pubkey.clone())
+        .expect("didn't set fee rate");
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, pubkey.clone());
         POOLS.with_borrow_mut(|p| {
