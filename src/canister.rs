@@ -58,6 +58,9 @@ pub struct RollbackTxArgs {
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PoolMeta {
     pub id: Pubkey,
+    pub name: String,
+    pub address: String,
+    pub coins: Vec<CoinId>,
 }
 
 #[post_upgrade]
@@ -71,6 +74,9 @@ pub fn list_pools() -> Vec<PoolMeta> {
         .iter()
         .map(|p| PoolMeta {
             id: p.pubkey.clone(),
+            name: Default::default(),
+            address: Default::default(),
+            coins: vec![CoinId::btc(), p.meta.id],
         })
         .collect()
 }

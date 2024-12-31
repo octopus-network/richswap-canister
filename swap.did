@@ -42,7 +42,12 @@ type OutputRune = record {
   rune_amount : opt nat;
   rune_id : opt text;
 };
-type PoolMeta = record { id : text };
+type PoolMeta = record {
+  id : text;
+  name : text;
+  coins : vec text;
+  address : text;
+};
 type PoolState = record {
   k : nat;
   txid : text;
