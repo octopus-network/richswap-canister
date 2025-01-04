@@ -65,7 +65,7 @@ pub struct PoolMeta {
 
 #[post_upgrade]
 pub fn re_init() {
-    crate::reset_all_pools();
+    //crate::reset_all_pools();
 }
 
 #[query]
@@ -250,10 +250,11 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             let pool_id = instruction.pool_id.ok_or("pool_id required".to_string())?;
             let nonce = instruction.nonce.ok_or("nonce required".to_string())?;
             let offer = pre_add_liquidity(pool_id.clone(), x).map_err(|e| e.to_string())?;
+            let offer_ = pre_add_liquidity(pool_id.clone(), y).map_err(|e| e.to_string())?;
             (offer.nonce == nonce)
                 .then(|| ())
                 .ok_or("pool state expired".to_string())?;
-            (offer.output == y)
+            (offer.output == y || offer_.output == x)
                 .then(|| ())
                 .ok_or("inputs mismatch with pre_add_liquidity".to_string())?;
             let (btc_delta, rune_delta) = if x.id == CoinId::btc() {
