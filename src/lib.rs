@@ -596,6 +596,32 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, pubkey: Pubkey) -> Result<(), Ex
     Ok(())
 }
 
+// TODO
+/// sqrt(x) * sqrt(x) <= x
+pub(crate) fn sqrt(x: u128) -> u128 {
+    x.isqrt()
+    // let mut z = x;
+    // let mut y = (z + 1) / 2;
+    // while y < z {
+    //     z = y;
+    //     y = (z + x / z) / 2;
+    // }
+    // z
+}
+
+// // TODO
+// pub(crate) fn sqaure_equals(x: u128, square: u128) -> bool {
+//     if let Some(s) = x.checked_mul(x) {
+//         if s >= square {
+//             s - square <= 2
+//         } else {
+//             square - s <= 2
+//         }
+//     } else {
+//         false
+//     }
+// }
+
 #[test]
 pub fn ser_deser_pubkey() {
     use std::str::FromStr;
