@@ -28,15 +28,16 @@ type InputRune = record {
 };
 type LiquidityOffer = record {
   output : CoinBalance;
-  inputs : vec Utxo;
+  inputs : opt Utxo;
   nonce : nat64;
 };
 type LiquidityPoolWithState = record {
   meta : CoinMeta;
   pubkey : text;
   state : opt PoolState;
-  fee_rate : nat;
+  fee_rate : nat64;
 };
+type Lp = record { shares : nat; profit : nat64 };
 type OutputRune = record {
   btc_amount : nat64;
   rune_amount : opt nat;
@@ -50,10 +51,12 @@ type PoolMeta = record {
 };
 type PoolState = record {
   k : nat;
+  lp : vec record { text; Lp };
+  to_burn : nat64;
   txid : text;
-  btc_utxo : Utxo;
-  incomes : nat;
-  rune_utxo : Utxo;
+  utxo : opt Utxo;
+  incomes : nat64;
+  untradable : nat64;
   nonce : nat64;
 };
 type ReeInstruction = record {
@@ -64,10 +67,10 @@ type ReeInstruction = record {
   nonce : opt nat64;
   pool_id : opt text;
 };
-type Result = variant { Ok; Err : text };
-type Result_1 = variant { Ok : LiquidityOffer; Err : ExchangeError };
-type Result_2 = variant { Ok : text; Err : ExchangeError };
-type Result_3 = variant { Ok : SwapOffer; Err : ExchangeError };
+type Result = variant { Ok : LiquidityOffer; Err : ExchangeError };
+type Result_1 = variant { Ok : text; Err : ExchangeError };
+type Result_2 = variant { Ok : SwapOffer; Err : ExchangeError };
+type Result_3 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
 type Result_4 = variant { Ok : text; Err : text };
 type SignPsbtCallingArgs = record {
   tx_id : text;
@@ -76,25 +79,28 @@ type SignPsbtCallingArgs = record {
   instruction : ReeInstruction;
   psbt_hex : text;
 };
-type SwapOffer = record {
-  output : CoinBalance;
-  inputs : vec Utxo;
-  nonce : nat64;
-};
+type SwapOffer = record { output : CoinBalance; nonce : nat64; input : Utxo };
 type Utxo = record {
   satoshis : nat64;
   balance : CoinBalance;
   txid : text;
   vout : nat32;
 };
+type WithdrawalOffer = record {
+  incomes : opt CoinBalance;
+  nonce : nat64;
+  input : Utxo;
+  user_outputs : vec CoinBalance;
+};
 service : {
-  finalize_tx : (FinalizeTxArgs) -> (Result);
+  finalize_tx : (FinalizeTxArgs) -> ();
   find_pool : (text) -> (opt LiquidityPoolWithState) query;
   list_pools : () -> (vec PoolMeta) query;
   manually_transfer : (text, nat32, nat64) -> (opt text);
-  pre_add_liquidity : (text, CoinBalance) -> (Result_1) query;
-  pre_create : (CoinBalance, CoinBalance) -> (Result_2);
-  pre_swap : (text, CoinBalance) -> (Result_3) query;
-  rollback_tx : (FinalizeTxArgs) -> (Result);
+  pre_add_liquidity : (text, CoinBalance) -> (Result) query;
+  pre_create : (CoinBalance, CoinBalance) -> (Result_1);
+  pre_swap : (text, CoinBalance) -> (Result_2) query;
+  pre_withdraw_liquidity : (text, text) -> (Result_3) query;
+  rollback_tx : (FinalizeTxArgs) -> ();
   sign_psbt : (SignPsbtCallingArgs) -> (Result_4);
 }

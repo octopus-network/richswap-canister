@@ -1,8 +1,9 @@
+#![feature(isqrt)]
 mod canister;
 mod pool;
 mod psbt;
 
-use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_FEE_RATE};
+use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_BURN_RATE, DEFAULT_FEE_RATE};
 use candid::{
     types::{Serializer, Type, TypeInner},
     CandidType, Deserialize,
@@ -585,7 +586,7 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, pubkey: Pubkey) -> Result<(), Ex
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
-    let pool = LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, pubkey.clone())
+    let pool = LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, DEFAULT_BURN_RATE, pubkey.clone())
         .expect("didn't set fee rate");
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, pubkey.clone());
@@ -608,19 +609,6 @@ pub(crate) fn sqrt(x: u128) -> u128 {
     // }
     // z
 }
-
-// // TODO
-// pub(crate) fn sqaure_equals(x: u128, square: u128) -> bool {
-//     if let Some(s) = x.checked_mul(x) {
-//         if s >= square {
-//             s - square <= 2
-//         } else {
-//             square - s <= 2
-//         }
-//     } else {
-//         false
-//     }
-// }
 
 #[test]
 pub fn ser_deser_pubkey() {
