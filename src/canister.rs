@@ -444,6 +444,14 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                 (pool_input.balance.value == pool_output.balance.value + rune_delta.value)
                     .then(|| ())
                     .ok_or("rune input/output mismatch".to_string())?;
+                // TODO
+                let burn_output = outputs
+                    .iter()
+                    .find(|&o| o.1 == pool.pubkey.pubkey_hash())
+                    .map(|o| o.0.balance.value);
+                (to_burn.unwrap_or(0) as u128 == burn_output.unwrap_or(0))
+                    .then(|| ())
+                    .ok_or("burn output mismatch".to_string())?;
                 Some(pool_output)
             };
             crate::psbt::sign(&mut psbt, &pool)
