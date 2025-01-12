@@ -498,7 +498,7 @@ pub(crate) fn with_pool_name(id: &CoinId) -> Option<Pubkey> {
     POOL_TOKENS.with_borrow(|p| p.get(&id))
 }
 
-pub(crate) fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
+fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
     let secp = Secp256k1::new();
     let (tweaked, _) = untweaked.0.tap_tweak(&secp, None);
     Pubkey::from_raw(tweaked.serialize().to_vec()).expect("tweaked 32bytes; qed")
@@ -627,41 +627,12 @@ pub(crate) fn sqrt(x: u128) -> u128 {
 }
 
 #[test]
-pub fn ser_deser_pubkey() {
-    let pk = Pubkey::from_str("03b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76");
-    assert!(pk.is_ok());
-}
-
-#[test]
 pub fn test_derive_p2tr_addr() {
-    use bitcoin::key::Secp256k1;
-    use bitcoin::Address;
-    use bitcoin::Network;
-    use bitcoin::XOnlyPublicKey;
-
     let x_only_pubkey_hex = "b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76";
     let x_only_pubkey_bytes = hex::decode(x_only_pubkey_hex).expect("Invalid hex");
-
-    let x_only_pubkey =
+    let untweaked =
         XOnlyPublicKey::from_slice(&x_only_pubkey_bytes).expect("Invalid x-only pubkey");
-
-    let address = Address::p2tr(&Secp256k1::new(), x_only_pubkey, None, Network::Bitcoin);
-
-    println!("Taproot Address: {}", address);
-}
-
-#[test]
-pub fn test_derive_p2wpkh_addr() {
-    use bitcoin::Address;
-    use bitcoin::CompressedPublicKey;
-    use bitcoin::Network;
-
-    let pubkey_hex = "021774b3f1c2d9f8e51529eda4a54624e2f067826b42281fb5b9a9b40fd4a967e9";
-    let pubkey_bytes = hex::decode(pubkey_hex).expect("Invalid hex");
-
-    let pubkey = CompressedPublicKey::from_slice(&pubkey_bytes).expect("Invalid pubkey");
-    let address = Address::p2wpkh(&pubkey, Network::Bitcoin);
-
-    println!("Segwit Address: {}", address);
-    assert!(false);
+    let address = Address::p2tr(&Secp256k1::new(), untweaked, None, Network::Bitcoin);
+    let tweaked = tweak_pubkey_with_empty(Pubkey(untweaked));
+    assert_eq!(address.to_string(), tweaked.address());
 }

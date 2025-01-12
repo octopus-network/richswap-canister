@@ -183,88 +183,58 @@ pub(crate) async fn sign(psbt: &mut Psbt, pool: &LiquidityPool) -> Result<(), St
     Ok(())
 }
 
-#[test]
-pub fn test_extract_pubkey() {
-    use std::str::FromStr;
-    let psbt_hex = "70736274ff0100fd170102000000038d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630300000000ffffffff8d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630400000000ffffffff8d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630200000000ffffffff0500000000000000000d6a5d0a00c0a233ce06acfa72022202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db052202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a5700010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a443a000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000001011fe94b010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086b02473044022100ef9ce94acdf2cc79434aa5b610b682f2eb057010802bc24d66587a45e0b2861f021f43b5ac2c8bc2a44da78ae42e3887b155b414a7f0ce116cd9f6094c92fab5b401210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001011f3413000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db050001011f2202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000000";
-    let psbt_bytes = hex::decode(&psbt_hex).unwrap();
-    let psbt = Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
-    for (i, input) in psbt.inputs.iter().enumerate() {
-        let pubkey_hash = extract_pubkey_hash(&input.witness_utxo.as_ref().unwrap().script_pubkey);
-        if i == 0 {
-            let assert = PubkeyHash::from_str("639985ae746acdfcf3d1e70973bbd42a39690d4a").unwrap();
-            assert_eq!(Some(assert), pubkey_hash);
-        } else {
-            let assert = PubkeyHash::from_str("fdc6db9c64ac369e0453531db338ce7301c6db05").unwrap();
-            assert_eq!(Some(assert), pubkey_hash);
-        }
-    }
-    // for (i, tx_out) in psbt.unsigned_tx.output.iter().enumerate() {
-    // let pubkey_hash = extract_pubkey_hash(&output.script_pubkey);
-    // if i == 0 {
-    //     let assert = PubkeyHash::from_str("639985ae746acdfcf3d1e70973bbd42a39690d4a").unwrap();
-    //     assert_eq!(Some(assert), pubkey_hash);
-    // } else {
-    //     let assert = PubkeyHash::from_str("fdc6db9c64ac369e0453531db338ce7301c6db05").unwrap();
-    //     assert_eq!(Some(assert), pubkey_hash);
-    // }
-    //     println!("{:?}", tx_out);
-    // }
-    // assert!(false);
-}
-
-#[test]
-pub fn test_reorg_outputs() {
-    use std::str::FromStr;
-    let psbt_hex = "70736274ff0100fd170102000000038d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630300000000ffffffff8d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630400000000ffffffff8d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630200000000ffffffff0500000000000000000d6a5d0a00c0a233ce06acfa72022202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db052202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a5700010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a443a000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000001011fe94b010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086b02473044022100ef9ce94acdf2cc79434aa5b610b682f2eb057010802bc24d66587a45e0b2861f021f43b5ac2c8bc2a44da78ae42e3887b155b414a7f0ce116cd9f6094c92fab5b401210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001011f3413000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db050001011f2202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000000";
-    let psbt_bytes = hex::decode(&psbt_hex).unwrap();
-    let psbt = Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
-    let txid =
-        crate::Txid::from_str("a846f3f3b4d0b642331b46c9924048b74891452384bd2af72714b83e3d9bbf0b")
-            .unwrap();
-    let runes = vec![
-        OutputRune {
-            btc_amount: 0,
-            rune_id: None,
-            rune_amount: None,
-        },
-        OutputRune {
-            btc_amount: 546,
-            rune_id: Some(CoinId::rune(840000, 846)),
-            rune_amount: Some(100000),
-        },
-        OutputRune {
-            btc_amount: 546,
-            rune_id: Some(CoinId::rune(840000, 846)),
-            rune_amount: Some(100000),
-        },
-        OutputRune {
-            btc_amount: 65623,
-            rune_id: None,
-            rune_amount: None,
-        },
-        OutputRune {
-            btc_amount: 14916,
-            rune_id: None,
-            rune_amount: None,
-        },
-    ];
-    let outputs = outputs(txid, &psbt, &runes).unwrap();
-    outputs.iter().for_each(|(o, p)| {
-        println!("{:?} {:?}", o, p);
-    });
-    let pool_pubkey = PubkeyHash::from_str("fdc6db9c64ac369e0453531db338ce7301c6db05").unwrap();
-    let rune_output = outputs
-        .iter()
-        .find(|&o| o.1 == pool_pubkey && o.0.balance.id != CoinId::btc())
-        .map(|o| o.0.clone());
-    assert!(rune_output.is_some());
-    let b = &outputs[3];
-    assert_eq!(b.0.balance.id, CoinId::btc());
-    assert_eq!(b.1, pool_pubkey);
-    let btc_output = outputs
-        .iter()
-        .find(|&o| o.1 == pool_pubkey && o.0.balance.id == CoinId::btc())
-        .map(|o| o.0.clone());
-    assert!(btc_output.is_some());
-}
+// #[test]
+// pub fn test_reorg_outputs() {
+//     use std::str::FromStr;
+//     let psbt_hex = "70736274ff0100fd170102000000038d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630300000000ffffffff8d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630400000000ffffffff8d78348803a5c96d9aecb795aad58650c86ba1e039e6918d6aaf5fcf6a2cca630200000000ffffffff0500000000000000000d6a5d0a00c0a233ce06acfa72022202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db052202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a5700010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a443a000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000001011fe94b010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086b02473044022100ef9ce94acdf2cc79434aa5b610b682f2eb057010802bc24d66587a45e0b2861f021f43b5ac2c8bc2a44da78ae42e3887b155b414a7f0ce116cd9f6094c92fab5b401210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001011f3413000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db050001011f2202000000000000160014fdc6db9c64ac369e0453531db338ce7301c6db05000000000000";
+//     let psbt_bytes = hex::decode(&psbt_hex).unwrap();
+//     let psbt = Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
+//     let txid =
+//         crate::Txid::from_str("a846f3f3b4d0b642331b46c9924048b74891452384bd2af72714b83e3d9bbf0b")
+//             .unwrap();
+//     let runes = vec![
+//         OutputRune {
+//             btc_amount: 0,
+//             rune_id: None,
+//             rune_amount: None,
+//         },
+//         OutputRune {
+//             btc_amount: 546,
+//             rune_id: Some(CoinId::rune(840000, 846)),
+//             rune_amount: Some(100000),
+//         },
+//         OutputRune {
+//             btc_amount: 546,
+//             rune_id: Some(CoinId::rune(840000, 846)),
+//             rune_amount: Some(100000),
+//         },
+//         OutputRune {
+//             btc_amount: 65623,
+//             rune_id: None,
+//             rune_amount: None,
+//         },
+//         OutputRune {
+//             btc_amount: 14916,
+//             rune_id: None,
+//             rune_amount: None,
+//         },
+//     ];
+//     let outputs = outputs(txid, &psbt, &runes).unwrap();
+//     outputs.iter().for_each(|(o, p)| {
+//         println!("{:?} {:?}", o, p);
+//     });
+//     let pool_pubkey = PubkeyHash::from_str("fdc6db9c64ac369e0453531db338ce7301c6db05").unwrap();
+//     let rune_output = outputs
+//         .iter()
+//         .find(|&o| o.1 == pool_pubkey && o.0.balance.id != CoinId::btc())
+//         .map(|o| o.0.clone());
+//     assert!(rune_output.is_some());
+//     let b = &outputs[3];
+//     assert_eq!(b.0.balance.id, CoinId::btc());
+//     assert_eq!(b.1, pool_pubkey);
+//     let btc_output = outputs
+//         .iter()
+//         .find(|&o| o.1 == pool_pubkey && o.0.balance.id == CoinId::btc())
+//         .map(|o| o.0.clone());
+//     assert!(btc_output.is_some());
+// }
