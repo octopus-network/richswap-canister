@@ -4,9 +4,10 @@ use crate::{
     CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo,
 };
 use bitcoin::psbt::Psbt;
-use candid::{CandidType, Deserialize};
+use candid::{CandidType, Deserialize, Principal};
 use ic_canister_log::log;
 use ic_cdk_macros::{init, post_upgrade, query, update};
+use rune_indexer::{Result3, Service as RuneIndexer};
 use serde::Serialize;
 use std::{collections::BTreeMap, str::FromStr};
 
@@ -109,7 +110,7 @@ pub async fn pre_create(x: CoinBalance, y: CoinBalance) -> Result<Pubkey, Exchan
         .ok_or(ExchangeError::InvalidPool)?;
     (x.id == CoinId::btc() || y.id == CoinId::btc())
         .then(|| ())
-        .ok_or(ExchangeError::BtcRequired)?;
+        .ok_or(ExchangeError::InvalidLiquidity)?;
     let rune_id = if x.id == CoinId::btc() { y.id } else { x.id };
     match crate::with_pool_name(&rune_id) {
         Some(pubkey) => crate::with_pool(&pubkey, |pool| {
@@ -121,10 +122,19 @@ pub async fn pre_create(x: CoinBalance, y: CoinBalance) -> Result<Pubkey, Exchan
         None => {
             let key = crate::request_ecdsa_key("key_1".to_string(), rune_id.to_bytes()).await?;
             let rune = if x.id == CoinId::btc() { y.id } else { x.id };
-            // TODO fetch CoinMeta from external
+            let principal = Principal::from_str(crate::RUNE_INDEXER_CANISTER).unwrap();
+            let indexer = RuneIndexer(principal);
+            let (result,): (Result3,) = indexer
+                .get_rune_entry_by_rune_id(rune.to_string())
+                .await
+                .map_err(|_| ExchangeError::FetchRuneIndexerError)?;
+            let name = match result {
+                Result3::Ok(entry) => Ok(entry.spaced_rune),
+                Result3::Err(_) => Err(ExchangeError::InvalidRuneId),
+            };
             let meta = CoinMeta {
                 id: rune,
-                symbol: "RICH".to_string(),
+                symbol: name?,
                 min_amount: 1,
             };
             crate::create_empty_pool(meta, key.clone())?;

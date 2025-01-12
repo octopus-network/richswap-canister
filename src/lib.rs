@@ -29,6 +29,7 @@ use std::{cell::RefCell, str::FromStr};
 use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
+pub const RUNE_INDEXER_CANISTER: &'static str = "o25oi-jaaaa-aaaal-ajj6a-cai";
 
 #[derive(Eq, PartialEq, Clone, CandidType, Debug, Deserialize, Serialize)]
 pub struct Output {
@@ -400,24 +401,20 @@ pub enum ExchangeError {
     InvalidPool,
     #[error("invalid liquidity")]
     InvalidLiquidity,
-    #[error("invalid requirements")]
-    InvalidRequirements,
     #[error("too small funds")]
     TooSmallFunds,
-    #[error("invalid amount: the given inputs couldn't cover the btc fee")]
-    FeeNotEnough,
-    #[error("invalid amount: the given inputs less than required amount")]
-    AmountGreaterThanUtxo,
     #[error("lp not found")]
     LpNotFound,
+    #[error("fail to fetch rune info")]
+    FetchRuneIndexerError,
+    #[error("invalid rune id")]
+    InvalidRuneId,
     #[error("invalid txid")]
     InvalidTxid,
     #[error("invalid numeric")]
     InvalidNumeric,
     #[error("a pool with the given id already exists")]
     PoolAlreadyExists,
-    #[error("a pool requires btc")]
-    BtcRequired,
     #[error("the pool has not been initialized or has been removed")]
     EmptyPool,
     #[error("couldn't derive a chain key for pool")]
@@ -611,7 +608,7 @@ pub(crate) fn get_fee_collector() -> Pubkey {
 }
 
 pub(crate) fn set_fee_collector(pubkey: Pubkey) {
-    FEE_COLLECTOR.with(|f| f.borrow_mut().set(pubkey));
+    let _ = FEE_COLLECTOR.with(|f| f.borrow_mut().set(pubkey));
 }
 
 /// sqrt(x) * sqrt(x) <= x
