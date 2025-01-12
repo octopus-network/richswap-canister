@@ -12,6 +12,7 @@ type ExchangeError = variant {
   InvalidLiquidity;
   EmptyPool;
   InvalidRequirements;
+  LpNotFound;
   FeeNotEnough;
   ChainKeyError;
   InvalidState : text;
@@ -37,7 +38,6 @@ type LiquidityPoolWithState = record {
   state : opt PoolState;
   fee_rate : nat64;
 };
-type Lp = record { shares : nat; profit : nat64 };
 type OutputRune = record {
   btc_amount : nat64;
   rune_amount : opt nat;
@@ -51,12 +51,10 @@ type PoolMeta = record {
 };
 type PoolState = record {
   k : nat;
-  lp : vec record { text; Lp };
-  to_burn : nat64;
+  lp : vec record { text; nat };
   txid : text;
   utxo : opt Utxo;
   incomes : nat64;
-  untradable : nat64;
   nonce : nat64;
 };
 type ReeInstruction = record {
@@ -92,7 +90,7 @@ type WithdrawalOffer = record {
   input : Utxo;
   user_outputs : vec CoinBalance;
 };
-service : {
+service : () -> {
   finalize_tx : (FinalizeTxArgs) -> ();
   find_pool : (text) -> (opt LiquidityPoolWithState) query;
   list_pools : () -> (vec PoolMeta) query;
