@@ -22,10 +22,10 @@ use ic_cdk::api::management_canister::{
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
     storable::Bound,
-    DefaultMemoryImpl, StableBTreeMap, Storable,
+    Cell, DefaultMemoryImpl, StableBTreeMap, Storable,
 };
 use serde::Serialize;
-use std::cell::RefCell;
+use std::{cell::RefCell, str::FromStr};
 use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
@@ -432,6 +432,7 @@ type Memory = VirtualMemory<DefaultMemoryImpl>;
 
 const POOLS_MEMORY_ID: MemoryId = MemoryId::new(0);
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
+const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -446,7 +447,9 @@ thread_local! {
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_TOKENS_MEMORY_ID))));
 
     // TODO
-    static FEE_COLLECTOR: RefCell<Option<Pubkey>> = RefCell::new(None);
+    static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
+        RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)),
+                                Pubkey::from_str("").unwrap()).expect("fail to init a StableCell"));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -603,17 +606,17 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, pubkey: Pubkey) -> Result<(), Ex
     Ok(())
 }
 
-// TODO
+pub(crate) fn get_fee_collector() -> Pubkey {
+    FEE_COLLECTOR.with(|f| f.borrow().get().clone())
+}
+
+pub(crate) fn set_fee_collector(pubkey: Pubkey) {
+    FEE_COLLECTOR.with(|f| f.borrow_mut().set(pubkey));
+}
+
 /// sqrt(x) * sqrt(x) <= x
 pub(crate) fn sqrt(x: u128) -> u128 {
     x.isqrt()
-    // let mut z = x;
-    // let mut y = (z + 1) / 2;
-    // while y < z {
-    //     z = y;
-    //     y = (z + x / z) / 2;
-    // }
-    // z
 }
 
 #[test]

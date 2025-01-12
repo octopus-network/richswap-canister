@@ -73,6 +73,16 @@ pub fn re_init() {
 #[init]
 pub fn init() {}
 
+#[update]
+pub fn set_fee_collector(pubkey: Pubkey) {
+    crate::set_fee_collector(pubkey);
+}
+
+#[query]
+pub fn get_fee_collector() -> Pubkey {
+    crate::get_fee_collector()
+}
+
 #[query]
 pub fn list_pools() -> Vec<PoolMeta> {
     crate::get_pools()
@@ -211,12 +221,7 @@ pub fn rollback_tx(args: RollbackTxArgs) {
         pool.rollback(args.tx_id)?;
         Ok(Some(pool))
     }) {
-        log!(
-            ERROR,
-            "An error {} occur during rollback tx: {}",
-            e,
-            args.tx_id
-        );
+        log!(ERROR, "Rollback tx {}: {}", e, args.tx_id);
     }
 }
 
@@ -228,12 +233,7 @@ pub fn finalize_tx(args: FinalizeTxArgs) {
         pool.finalize(args.tx_id)?;
         Ok(Some(pool))
     }) {
-        log!(
-            ERROR,
-            "An error {} occur during finalize tx: {}",
-            e,
-            args.tx_id
-        );
+        log!(ERROR, "Finalizing tx {}: {}", e, args.tx_id);
     }
 }
 
@@ -342,6 +342,7 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
                     .then(|| ())
                     .ok_or("rune input/output mismatch".to_string())?;
             } else {
+                // PartialEq tolerance
                 let offer_ = pool.liquidity_should_add(y).map_err(|e| e.to_string())?;
                 (offer == y || offer_ == x)
                     .then(|| ())
@@ -368,15 +369,13 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             let user_share = crate::sqrt(user_k);
             crate::with_pool_mut(&pool_id, |p| {
                 let mut pool = p.expect("already checked in pre_add_liquidity;qed");
-                let k = pool_output.balance.value * (pool_output.satoshis - state.incomes) as u128;
                 state.utxo = Some(pool_output);
                 state
                     .lp
                     .entry(user_pubkey_hash)
                     .and_modify(|lp| *lp += user_share)
                     .or_insert(user_share);
-                // already check overflow in `pre_add_liquidity`
-                state.k = k;
+                state.k = state.rune_supply() * state.btc_supply() as u128;
                 state.nonce += 1;
                 pool.commit(state);
                 Ok(Some(pool))
