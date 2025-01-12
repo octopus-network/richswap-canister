@@ -11,19 +11,21 @@ crate-type = ["cdylib"]
 candid = "0.10"
 ic-cdk = "0.17"
 ic-cdk-macros = "0.17"
-
 serde = { version = "1.0", features = ["derive"] }
 syn = "1.0"
 anyhow =  "1"
 thiserror = "1"
 generic-array = "0.14"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+serde_derive = "1.0"
 cfg-if = "1.0"
+time = "0.3"
 hex = "0.4"
-rust_decimal = { version = "1.28", features = ["serde-str", "maths"] }
-rust_decimal_macros = "1.28"
 lazy_static = "1.5"
 bitcoin = { version = "0.32.4", default-features = false, features = ["base64", "serde"] }
 ic-stable-structures = "0.6"
+ic-canisters-http-types = { git = "https://github.com/dfinity/ic", tag = "release-2024-03-06_23-01+p2p" }
+ic-canister-log = { git = "https://github.com/dfinity/ic", tag = "release-2024-01-18_23-01" }
 ciborium = "0.2.1"
 
 [features]

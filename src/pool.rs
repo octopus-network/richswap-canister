@@ -4,9 +4,9 @@ use ic_stable_structures::{storable::Bound, Storable};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-/// represents 0.9/100 = 9/1_000 = 900/1_000_000
+/// represents 0.7/100 = 7/1_000 = 700/1_000_000
 pub const DEFAULT_FEE_RATE: u64 = 900;
-/// represents 0.1/100 = 1/1_000 = 100/1_000_000
+/// represents 0.2/100 = 2/1_000 = 200/1_000_000
 pub const DEFAULT_BURN_RATE: u64 = 100;
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -24,12 +24,6 @@ impl CoinMeta {
             min_amount: 546,
         }
     }
-}
-
-#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Lp {
-    pub shares: u128,
-    pub profit: u64,
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize)]
@@ -67,10 +61,35 @@ pub struct PoolState {
     pub txid: Txid,
     pub utxo: Option<Utxo>,
     pub incomes: u64,
-    pub to_burn: u64,
-    pub untradable: u64,
     pub k: u128,
-    pub lp: BTreeMap<String, Lp>,
+    pub lp: BTreeMap<String, u128>,
+}
+
+impl PoolState {
+    pub fn satoshis(&self) -> u64 {
+        self.utxo
+            .as_ref()
+            .map(|utxo| utxo.satoshis)
+            .unwrap_or_default()
+    }
+
+    pub fn btc_supply(&self) -> u64 {
+        self.utxo
+            .as_ref()
+            .map(|utxo| utxo.satoshis - self.incomes)
+            .unwrap_or_default()
+    }
+
+    pub fn rune_supply(&self) -> u128 {
+        self.utxo
+            .as_ref()
+            .map(|utxo| utxo.balance.value)
+            .unwrap_or_default()
+    }
+
+    pub fn lp(&self, key: &str) -> u128 {
+        self.lp.get(key).copied().unwrap_or_default()
+    }
 }
 
 impl Storable for PoolState {
@@ -140,16 +159,8 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidPool)?;
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let btc_supply = recent_state
-            .utxo
-            .as_ref()
-            .map(|utxo| utxo.satoshis - recent_state.untradable)
-            .unwrap_or(0);
-        let rune_supply = recent_state
-            .utxo
-            .as_ref()
-            .map(|utxo| utxo.balance.value)
-            .unwrap_or(0);
+        let btc_supply = recent_state.btc_supply();
+        let rune_supply = recent_state.rune_supply();
         if btc_supply == 0 || rune_supply == 0 {
             if side.id == btc_meta.id {
                 return Ok(CoinBalance {
@@ -206,57 +217,31 @@ impl LiquidityPool {
     pub(crate) fn available_to_withdraw(
         &self,
         pubkey_hash: impl AsRef<str>,
-    ) -> Result<(u64, CoinBalance, u64, Option<u64>), ExchangeError> {
+    ) -> Result<(u64, CoinBalance, Option<u64>), ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let lp = recent_state
-            .lp
-            .get(pubkey_hash.as_ref())
-            .map(|r| r.clone())
-            .ok_or(ExchangeError::InsufficientFunds)?;
-        let btc_supply = recent_state
-            .utxo
-            .as_ref()
-            .map(|utxo| utxo.satoshis - recent_state.untradable)
-            .ok_or(ExchangeError::EmptyPool)?;
-        let rune_supply = recent_state
-            .utxo
-            .as_ref()
-            .map(|utxo| utxo.balance.value)
-            .ok_or(ExchangeError::EmptyPool)?;
+        let lp = recent_state.lp(pubkey_hash.as_ref());
+        (lp != 0).then(|| ()).ok_or(ExchangeError::LpNotFound)?;
+        let btc_supply = recent_state.btc_supply();
+        let rune_supply = recent_state.rune_supply();
         let sqrt_k = crate::sqrt(recent_state.k);
-        // take all the profit
-        let profit: u64 = lp
-            .shares
-            .checked_mul(recent_state.incomes as u128)
-            .and_then(|r| r.checked_div(sqrt_k))
-            .and_then(|r| r.checked_add(lp.profit as u128))
-            .ok_or(ExchangeError::Overflow)?
-            .try_into()
-            .map_err(|_| ExchangeError::Overflow)?;
-        let try_burn = (recent_state.to_burn >= CoinMeta::btc().min_amount as u64)
-            .then(|| recent_state.to_burn);
+        let try_burn = (recent_state.incomes >= CoinMeta::btc().min_amount as u64)
+            .then(|| recent_state.incomes);
         if recent_state.lp.len() > 1 {
             // there are still other lps
             let mut btc_delta: u64 = lp
-                .shares
                 .checked_mul(btc_supply as u128)
                 .and_then(|r| r.checked_div(sqrt_k))
-                .and_then(|r| r.checked_add(profit as u128))
                 .filter(|btc| *btc >= CoinMeta::btc().min_amount)
                 .ok_or(ExchangeError::TooSmallFunds)?
                 .try_into()
                 .map_err(|_| ExchangeError::Overflow)?;
             let mut rune_delta = lp
-                .shares
                 .checked_mul(rune_supply)
                 .and_then(|m| m.checked_div(sqrt_k))
                 .filter(|rune| *rune >= self.meta.min_amount)
                 .ok_or(ExchangeError::TooSmallFunds)?;
             let btc_remains = recent_state
-                .utxo
-                .as_ref()
-                .expect("already checked")
-                .satoshis
+                .satoshis()
                 .checked_sub(try_burn.unwrap_or(0))
                 .and_then(|r| r.checked_sub(btc_delta))
                 .ok_or(ExchangeError::EmptyPool)?;
@@ -271,17 +256,13 @@ impl LiquidityPool {
                     id: self.meta.id,
                     value: rune_delta,
                 },
-                profit,
                 try_burn,
             ))
         } else {
             // the last lp
             // if returns InvalidPool, it is a bug
             let btc_remains = recent_state
-                .utxo
-                .as_ref()
-                .expect("already checked")
-                .satoshis
+                .satoshis()
                 .checked_sub(try_burn.unwrap_or(0))
                 .ok_or(ExchangeError::InvalidPool)?;
             if btc_remains < CoinMeta::btc().min_amount as u64 {
@@ -300,7 +281,6 @@ impl LiquidityPool {
                     id: self.meta.id,
                     value: rune_delta,
                 },
-                profit,
                 try_burn,
             ))
         }
@@ -318,15 +298,10 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidPool)?;
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let btc_supply = recent_state
-            .utxo
-            .as_ref()
-            .map(|utxo| utxo.satoshis - recent_state.untradable)
-            .ok_or(ExchangeError::EmptyPool)?;
-        let rune_supply = recent_state
-            .utxo
-            .as_ref()
-            .map(|utxo| utxo.balance.value)
+        let btc_supply = recent_state.btc_supply();
+        let rune_supply = recent_state.rune_supply();
+        (btc_supply != 0 && rune_supply != 0)
+            .then(|| ())
             .ok_or(ExchangeError::EmptyPool)?;
         if taker.id == CoinId::btc() {
             // btc -> rune
@@ -363,7 +338,7 @@ impl LiquidityPool {
                 .and_then(|sum| recent_state.k.checked_div(sum))
                 .ok_or(ExchangeError::Overflow)?;
             // we must ensure that utxo of pool should be >= 546 to hold the dust
-            (btc_remains + recent_state.untradable as u128 >= btc_meta.min_amount)
+            (btc_remains + recent_state.incomes as u128 >= btc_meta.min_amount)
                 .then(|| ())
                 .ok_or(ExchangeError::EmptyPool)?;
             let btc_remains: u64 = btc_remains.try_into().expect("BTC amount overflow");

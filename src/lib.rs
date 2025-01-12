@@ -1,5 +1,6 @@
 #![feature(isqrt)]
 mod canister;
+mod ic_log;
 mod pool;
 mod psbt;
 
@@ -407,6 +408,8 @@ pub enum ExchangeError {
     FeeNotEnough,
     #[error("invalid amount: the given inputs less than required amount")]
     AmountGreaterThanUtxo,
+    #[error("lp not found")]
+    LpNotFound,
     #[error("invalid txid")]
     InvalidTxid,
     #[error("invalid numeric")]
@@ -441,6 +444,9 @@ thread_local! {
 
     static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, Pubkey, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_TOKENS_MEMORY_ID))));
+
+    // TODO
+    static FEE_COLLECTOR: RefCell<Option<Pubkey>> = RefCell::new(None);
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
