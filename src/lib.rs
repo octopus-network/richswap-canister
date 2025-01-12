@@ -1,8 +1,10 @@
+#![feature(isqrt)]
 mod canister;
+mod ic_log;
 mod pool;
 mod psbt;
 
-use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_FEE_RATE};
+use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_BURN_RATE, DEFAULT_FEE_RATE};
 use candid::{
     types::{Serializer, Type, TypeInner},
     CandidType, Deserialize,
@@ -20,10 +22,10 @@ use ic_cdk::api::management_canister::{
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
     storable::Bound,
-    DefaultMemoryImpl, StableBTreeMap, Storable,
+    Cell, DefaultMemoryImpl, StableBTreeMap, Storable,
 };
 use serde::Serialize;
-use std::cell::RefCell;
+use std::{cell::RefCell, str::FromStr};
 use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
@@ -406,6 +408,8 @@ pub enum ExchangeError {
     FeeNotEnough,
     #[error("invalid amount: the given inputs less than required amount")]
     AmountGreaterThanUtxo,
+    #[error("lp not found")]
+    LpNotFound,
     #[error("invalid txid")]
     InvalidTxid,
     #[error("invalid numeric")]
@@ -428,6 +432,7 @@ type Memory = VirtualMemory<DefaultMemoryImpl>;
 
 const POOLS_MEMORY_ID: MemoryId = MemoryId::new(0);
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
+const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -440,6 +445,11 @@ thread_local! {
 
     static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, Pubkey, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_TOKENS_MEMORY_ID))));
+
+    // TODO
+    static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
+        RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)),
+                                Pubkey::from_str("").unwrap()).expect("fail to init a StableCell"));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -585,7 +595,7 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, pubkey: Pubkey) -> Result<(), Ex
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
-    let pool = LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, pubkey.clone())
+    let pool = LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, DEFAULT_BURN_RATE, pubkey.clone())
         .expect("didn't set fee rate");
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, pubkey.clone());
@@ -594,6 +604,19 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, pubkey: Pubkey) -> Result<(), Ex
         });
     });
     Ok(())
+}
+
+pub(crate) fn get_fee_collector() -> Pubkey {
+    FEE_COLLECTOR.with(|f| f.borrow().get().clone())
+}
+
+pub(crate) fn set_fee_collector(pubkey: Pubkey) {
+    FEE_COLLECTOR.with(|f| f.borrow_mut().set(pubkey));
+}
+
+/// sqrt(x) * sqrt(x) <= x
+pub(crate) fn sqrt(x: u128) -> u128 {
+    x.isqrt()
 }
 
 #[test]
