@@ -382,6 +382,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-log"
+version = "0.0.1"
+dependencies = [
+ "candid",
+ "ic-canister-log",
+ "ic-canisters-http-types",
+ "ic-cdk",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "ic-stable-structures"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -549,15 +563,13 @@ dependencies = [
  "ic-canisters-http-types",
  "ic-cdk",
  "ic-cdk-macros",
+ "ic-log",
  "ic-stable-structures",
  "lazy_static",
  "rune-indexer",
  "serde",
- "serde_derive",
- "serde_json",
  "syn 1.0.109",
  "thiserror",
- "time",
 ]
 
 [[package]]

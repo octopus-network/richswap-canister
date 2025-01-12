@@ -1,6 +1,5 @@
 #![feature(isqrt)]
 mod canister;
-mod ic_log;
 mod pool;
 mod psbt;
 

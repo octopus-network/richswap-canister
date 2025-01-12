@@ -1,0 +1,14 @@
+[package]
+name = "ic-log"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+candid = "0.10"
+ic-cdk = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_derive = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+time = "0.3"
+ic-canisters-http-types = { git = "https://github.com/dfinity/ic", tag = "release-2024-03-06_23-01+p2p" }
+ic-canister-log = { git = "https://github.com/dfinity/ic", tag = "release-2024-01-18_23-01" }

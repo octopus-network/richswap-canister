@@ -1,5 +1,4 @@
 use crate::{
-    ic_log::*,
     pool::{CoinMeta, LiquidityPoolWithState, PoolState},
     CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo,
 };
@@ -7,6 +6,7 @@ use bitcoin::psbt::Psbt;
 use candid::{CandidType, Deserialize, Principal};
 use ic_canister_log::log;
 use ic_cdk_macros::{init, post_upgrade, query, update};
+use ic_log::*;
 use rune_indexer::{Result3, Service as RuneIndexer};
 use serde::Serialize;
 use std::{collections::BTreeMap, str::FromStr};
@@ -608,7 +608,7 @@ fn http_request(
         ic_cdk::trap("update call rejected");
     }
     if req.path() == "/logs" {
-        crate::ic_log::do_reply(req)
+        ic_log::do_reply(req)
     } else {
         ic_canisters_http_types::HttpResponseBuilder::not_found().build()
     }
