@@ -4,33 +4,21 @@ use crate::{
     CoinBalance, CoinId, ExchangeError, Txid, Utxo,
 };
 use bitcoin::{
-    hashes::Hash,
     psbt::Psbt,
-    sighash::{EcdsaSighashType, Prevouts, SighashCache},
-    Amount, OutPoint, PubkeyHash, Script, TapSighashType, TxOut, Witness,
+    sighash::{Prevouts, SighashCache},
+    Address, Network, OutPoint, Script, TapSighashType, Witness,
 };
 
-pub(crate) fn extract_pubkey_hash(script: &Script) -> Option<PubkeyHash> {
-    for inst in script.instructions() {
-        match inst {
-            Ok(bitcoin::blockdata::script::Instruction::PushBytes(bytes)) => {
-                if bytes.len() == 20 {
-                    return Some(
-                        bitcoin::PubkeyHash::from_slice(bytes.as_bytes())
-                            .expect("pubkey hash is 20 bytes"),
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+pub(crate) fn extract_addr(script: &Script) -> Option<String> {
+    Address::from_script(script, Network::Bitcoin)
+        .map(|addr| addr.to_string())
+        .ok()
 }
 
 pub(crate) fn inputs(
     psbt: &Psbt,
     input_runes: &[InputRune],
-) -> Result<Vec<(Utxo, Option<PubkeyHash>)>, ExchangeError> {
+) -> Result<Vec<(Utxo, String)>, ExchangeError> {
     (psbt.unsigned_tx.input.len() == input_runes.len() && psbt.inputs.len() == input_runes.len())
         .then(|| ())
         .ok_or(ExchangeError::InvalidPsbt("inputs not enough".to_string()))?;
@@ -47,7 +35,9 @@ pub(crate) fn inputs(
             .ok_or(ExchangeError::InvalidPsbt(
                 "witness_utxo required".to_string(),
             ))?;
-        let pubkey_hash = extract_pubkey_hash(&witness.script_pubkey);
+        let addr = extract_addr(&witness.script_pubkey).ok_or(ExchangeError::InvalidPsbt(
+            format!("uncognized input {}", i),
+        ))?;
         match input_rune.rune_id {
             Some(rune_id) => {
                 let amount = input_rune
@@ -68,7 +58,7 @@ pub(crate) fn inputs(
                         .try_into()
                         .expect("satoshis amount overflow"),
                 };
-                r.push((utxo, pubkey_hash));
+                r.push((utxo, addr));
             }
             None => {
                 let utxo = Utxo {
@@ -83,7 +73,7 @@ pub(crate) fn inputs(
                         .try_into()
                         .expect("satoshis amount overflow"),
                 };
-                r.push((utxo, pubkey_hash));
+                r.push((utxo, addr));
             }
         }
     }
@@ -94,130 +84,100 @@ pub(crate) fn outputs(
     txid: Txid,
     psbt: &Psbt,
     output_runes: &[OutputRune],
-) -> Result<Vec<(Utxo, PubkeyHash)>, ExchangeError> {
+) -> Result<Vec<(Utxo, String)>, ExchangeError> {
     (psbt.unsigned_tx.output.len() == output_runes.len()
         && psbt.outputs.len() == output_runes.len())
     .then(|| ())
     .ok_or(ExchangeError::InvalidPsbt("outputs not enough".to_string()))?;
     let mut r = vec![];
     for (i, tx_out) in psbt.unsigned_tx.output.iter().enumerate() {
-        if tx_out.script_pubkey.is_op_return() {
+        let addr = extract_addr(&tx_out.script_pubkey);
+        if addr.is_none() {
             continue;
         }
-        if tx_out.script_pubkey.is_p2tr() {
-            continue;
-        }
-        if tx_out.script_pubkey.is_p2wpkh() {
-            let pubkey_hash = extract_pubkey_hash(&tx_out.script_pubkey);
-            if pubkey_hash.is_none() {
-                continue;
+        (i < output_runes.len() && i < psbt.outputs.len())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt("outputs not enough".to_string()))?;
+        let output_rune = &output_runes[i];
+        match output_rune.rune_id {
+            Some(rune_id) => {
+                let amount = output_rune
+                    .rune_amount
+                    .ok_or(ExchangeError::InvalidPsbt(format!(
+                        "rune amount is required for output {}",
+                        i
+                    )))?;
+                let utxo = Utxo {
+                    txid,
+                    vout: i as u32,
+                    balance: CoinBalance {
+                        id: rune_id,
+                        value: amount,
+                    },
+                    satoshis: output_rune
+                        .btc_amount
+                        .try_into()
+                        .expect("satoshis amount overflow"),
+                };
+                r.push((utxo, addr.unwrap()));
             }
-            (i < output_runes.len() && i < psbt.outputs.len())
-                .then(|| ())
-                .ok_or(ExchangeError::InvalidPsbt("outputs not enough".to_string()))?;
-            let output_rune = &output_runes[i];
-            match output_rune.rune_id {
-                Some(rune_id) => {
-                    let amount =
-                        output_rune
-                            .rune_amount
-                            .ok_or(ExchangeError::InvalidPsbt(format!(
-                                "rune amount is required for output {}",
-                                i
-                            )))?;
-                    let utxo = Utxo {
-                        txid,
-                        vout: i as u32,
-                        balance: CoinBalance {
-                            id: rune_id,
-                            value: amount,
-                        },
-                        satoshis: output_rune
-                            .btc_amount
-                            .try_into()
-                            .expect("satoshis amount overflow"),
-                    };
-                    r.push((utxo, pubkey_hash.unwrap()));
-                }
-                None => {
-                    let utxo = Utxo {
-                        txid,
-                        vout: i as u32,
-                        balance: CoinBalance {
-                            id: CoinId::btc(),
-                            value: output_rune.btc_amount as u128,
-                        },
-                        satoshis: output_rune
-                            .btc_amount
-                            .try_into()
-                            .expect("satoshis amount overflow"),
-                    };
-                    r.push((utxo, pubkey_hash.unwrap()));
-                }
+            None => {
+                let utxo = Utxo {
+                    txid,
+                    vout: i as u32,
+                    balance: CoinBalance {
+                        id: CoinId::btc(),
+                        value: output_rune.btc_amount as u128,
+                    },
+                    satoshis: output_rune
+                        .btc_amount
+                        .try_into()
+                        .expect("satoshis amount overflow"),
+                };
+                r.push((utxo, addr.unwrap()));
             }
         }
     }
     Ok(r)
 }
 
-fn cmp_and_clone(mine: &[Utxo], outpoint: &OutPoint) -> Option<Utxo> {
-    for utxo in mine.iter() {
-        if Into::<bitcoin::Txid>::into(utxo.txid) == outpoint.txid && utxo.vout == outpoint.vout {
-            return Some(utxo.clone());
-        }
-    }
-    None
+fn cmp<'a>(mine: &'a Utxo, outpoint: &OutPoint) -> Option<&'a Utxo> {
+    (Into::<bitcoin::Txid>::into(mine.txid) == outpoint.txid && mine.vout == outpoint.vout)
+        .then(|| mine)
 }
 
 pub(crate) async fn sign(psbt: &mut Psbt, pool: &LiquidityPool) -> Result<(), String> {
-    let state = pool.states.last().ok_or("EmptyPool".to_string())?;
-    let utxos = state
+    let state = pool
+        .states
+        .last()
+        .ok_or(ExchangeError::EmptyPool.to_string())?;
+    let utxo = state
         .utxo
         .as_ref()
-        .map(|u| vec![u.clone()])
-        .unwrap_or_default();
+        .ok_or(ExchangeError::EmptyPool.to_string())?;
+    let path = pool.base_id().to_bytes();
     let mut cache = SighashCache::new(&psbt.unsigned_tx);
+    let prevouts = Prevouts::All(&psbt.unsigned_tx.output);
     for (i, input) in psbt.unsigned_tx.input.iter().enumerate() {
         let outpoint = &input.previous_output;
-        if let Some(utxo) = cmp_and_clone(&utxos, outpoint) {
+        if let Some(_) = cmp(utxo, outpoint) {
             (i < psbt.inputs.len())
                 .then(|| ())
-                .ok_or("invalid psbt: inputs not enough".to_string())?;
+                .ok_or(ExchangeError::InvalidPsbt("inputs not enough".to_string()).to_string())?;
             let input = &mut psbt.inputs[i];
-            // FIXME can we assume that UTXOs of pool are P2WPKH?
-            let unlock_script = input
-                .witness_utxo
-                .as_ref()
-                .ok_or("the pool utxo is not P2WPKH?".to_string())?
-                .script_pubkey
-                .clone();
             let sighash = cache
-                .p2wpkh_signature_hash(
-                    i,
-                    &unlock_script,
-                    Amount::from_sat(utxo.satoshis),
-                    EcdsaSighashType::All,
-                )
+                .taproot_key_spend_signature_hash(i, &prevouts, TapSighashType::Default)
+                .expect("couldn't construct taproot sighash");
+            let raw_sig = crate::sign_prehash_with_schnorr(&sighash, "key_1", path.clone())
+                .await
                 .map_err(|e| e.to_string())?;
-            // TODO key_id
-            let raw_signature = crate::sign_prehash_with_ecdsa(
-                &sighash,
-                // "dfx_test_key".to_string(),
-                "key_1".to_string(),
-                pool.base_id().to_bytes(),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-            let signature = bitcoin::ecdsa::Signature {
-                signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&raw_signature)
-                    .expect("assert: chain-key signature is 64-bytes compact format"),
-                sighash_type: EcdsaSighashType::All,
+            let inner_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&raw_sig)
+                .expect("assert: chain-key schnorr signature is 64-bytes format");
+            let signature = bitcoin::taproot::Signature {
+                signature: inner_sig,
+                sighash_type: TapSighashType::Default,
             };
-            input.final_script_witness = Some(Witness::p2wpkh(
-                &signature,
-                &bitcoin::secp256k1::PublicKey::from_slice(&pool.pubkey.0.to_bytes())
-                    .expect("assert: pool pubkey is generated by ICP"),
-            ));
+            input.final_script_witness = Some(Witness::p2tr_key_spend(&signature));
         }
     }
     Ok(())

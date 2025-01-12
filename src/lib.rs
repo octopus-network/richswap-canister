@@ -4,19 +4,18 @@ mod pool;
 mod psbt;
 
 use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_BURN_RATE, DEFAULT_FEE_RATE};
+use bitcoin::{
+    key::{TapTweak, TweakedPublicKey},
+    secp256k1::Secp256k1,
+    Address, Network, XOnlyPublicKey,
+};
 use candid::{
     types::{Serializer, Type, TypeInner},
     CandidType, Deserialize,
 };
-use ic_cdk::api::management_canister::{
-    ecdsa::{
-        self, EcdsaCurve, EcdsaKeyId, EcdsaPublicKeyArgument, SignWithEcdsaArgument,
-        SignWithEcdsaResponse,
-    },
-    schnorr::{
-        self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument, SignWithSchnorrArgument,
-        SignWithSchnorrResponse,
-    },
+use ic_cdk::api::management_canister::schnorr::{
+    self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument, SignWithSchnorrArgument,
+    SignWithSchnorrResponse,
 };
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
@@ -24,11 +23,13 @@ use ic_stable_structures::{
     Cell, DefaultMemoryImpl, StableBTreeMap, Storable,
 };
 use serde::Serialize;
-use std::{cell::RefCell, str::FromStr};
+use std::cell::RefCell;
+use std::str::FromStr;
 use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
 pub const RUNE_INDEXER_CANISTER: &'static str = "o25oi-jaaaa-aaaal-ajj6a-cai";
+pub const DEFAULT_FEE_COLLECTOR: &'static str = "";
 
 #[derive(Eq, PartialEq, Clone, CandidType, Debug, Deserialize, Serialize)]
 pub struct Output {
@@ -45,25 +46,18 @@ pub struct Utxo {
 }
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
-pub struct Pubkey(pub(crate) bitcoin::PublicKey);
+pub struct Pubkey(pub(crate) XOnlyPublicKey);
 
 impl Pubkey {
     pub fn from_raw(key: Vec<u8>) -> Result<Pubkey, String> {
-        bitcoin::PublicKey::from_slice(&key)
+        XOnlyPublicKey::from_slice(&key)
             .map(|s| Pubkey(s))
             .map_err(|_| "invalid pubkey".to_string())
     }
 
-    pub fn p2wpkh_addr(&self) -> String {
-        bitcoin::Address::p2wpkh(
-            &bitcoin::key::CompressedPublicKey(self.0.inner),
-            bitcoin::Network::Bitcoin,
-        )
-        .to_string()
-    }
-
-    pub fn pubkey_hash(&self) -> bitcoin::PubkeyHash {
-        self.0.pubkey_hash()
+    pub fn address(&self) -> String {
+        let assumed_tweaked = TweakedPublicKey::dangerous_assume_tweaked(self.0);
+        Address::p2tr_tweaked(assumed_tweaked, Network::Bitcoin).to_string()
     }
 }
 
@@ -82,25 +76,25 @@ impl CandidType for Pubkey {
 
 impl Storable for Pubkey {
     const BOUND: Bound = Bound::Bounded {
-        max_size: 33,
+        max_size: 32,
         is_fixed_size: true,
     };
 
     fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-        std::borrow::Cow::Owned(self.0.to_bytes())
+        std::borrow::Cow::Owned(self.0.serialize().to_vec())
     }
 
     fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-        Self(bitcoin::PublicKey::from_slice(&bytes).expect("invalid pubkey"))
+        Self(XOnlyPublicKey::from_slice(&bytes).expect("invalid pubkey"))
     }
 }
 
-impl std::str::FromStr for Pubkey {
+impl FromStr for Pubkey {
     type Err = ExchangeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        bitcoin::PublicKey::from_str(s)
-            .map(|pk| Self(pk))
+        XOnlyPublicKey::from_str(s)
+            .map(|xopk| Self(xopk))
             .map_err(|_| ExchangeError::InvalidNumeric)
     }
 }
@@ -111,14 +105,13 @@ impl<'de> serde::de::Visitor<'de> for PubkeyVisitor {
     type Value = Pubkey;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(formatter, "a Bitcoin Pubkey")
+        write!(formatter, "a Schnorr XOnlyPubkey")
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Pubkey, E>
     where
         E: serde::de::Error,
     {
-        use std::str::FromStr;
         Pubkey::from_str(value)
             .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
     }
@@ -159,7 +152,7 @@ impl CandidType for Txid {
     }
 }
 
-impl std::str::FromStr for Txid {
+impl FromStr for Txid {
     type Err = ExchangeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -201,7 +194,6 @@ impl<'de> serde::de::Visitor<'de> for TxidVisitor {
     where
         E: serde::de::Error,
     {
-        use std::str::FromStr;
         Txid::from_str(value)
             .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
     }
@@ -297,7 +289,7 @@ impl CoinId {
     }
 }
 
-impl std::str::FromStr for CoinId {
+impl FromStr for CoinId {
     type Err = ExchangeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -357,7 +349,6 @@ impl<'de> serde::de::Visitor<'de> for CoinIdVisitor {
     where
         E: serde::de::Error,
     {
-        use std::str::FromStr;
         CoinId::from_str(value)
             .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
     }
@@ -442,10 +433,9 @@ thread_local! {
     static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, Pubkey, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_TOKENS_MEMORY_ID))));
 
-    // TODO
     static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
-        RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)),
-                                Pubkey::from_str("").unwrap()).expect("fail to init a StableCell"));
+        RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), Pubkey::from_str(DEFAULT_FEE_COLLECTOR).expect("invalid pubkey: fee collector"))
+                     .expect("fail to init a StableCell"));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -508,8 +498,14 @@ pub(crate) fn with_pool_name(id: &CoinId) -> Option<Pubkey> {
     POOL_TOKENS.with_borrow(|p| p.get(&id))
 }
 
+pub(crate) fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
+    let secp = Secp256k1::new();
+    let (tweaked, _) = untweaked.0.tap_tweak(&secp, None);
+    Pubkey::from_raw(tweaked.serialize().to_vec()).expect("tweaked 32bytes; qed")
+}
+
 pub(crate) async fn request_schnorr_key(
-    key_name: String,
+    key_name: impl ToString,
     path: Vec<u8>,
 ) -> Result<Pubkey, ExchangeError> {
     let arg = SchnorrPublicKeyArgument {
@@ -517,40 +513,42 @@ pub(crate) async fn request_schnorr_key(
         derivation_path: vec![path],
         key_id: SchnorrKeyId {
             algorithm: SchnorrAlgorithm::Bip340secp256k1,
-            name: key_name,
+            name: key_name.to_string(),
         },
     };
     let res = schnorr::schnorr_public_key(arg)
         .await
         .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-    let pubkey =
-        Pubkey::from_raw(res.0.public_key.to_vec()).expect("management api error: invalid pubkey");
-    Ok(pubkey)
+    // TODO assume this is untweaked
+    let pubkey = Pubkey::from_raw(res.0.public_key[1..].to_vec())
+        .expect("management api error: invalid pubkey");
+    let tweaked = tweak_pubkey_with_empty(pubkey);
+    Ok(tweaked)
 }
 
-pub(crate) async fn request_ecdsa_key(
-    key_name: String,
-    path: Vec<u8>,
-) -> Result<Pubkey, ExchangeError> {
-    let args = EcdsaPublicKeyArgument {
-        canister_id: None,
-        derivation_path: vec![path],
-        key_id: EcdsaKeyId {
-            curve: EcdsaCurve::Secp256k1,
-            name: key_name,
-        },
-    };
-    let res = ecdsa::ecdsa_public_key(args)
-        .await
-        .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-    let pubkey =
-        Pubkey::from_raw(res.0.public_key.to_vec()).expect("management api error: invalid pubkey");
-    Ok(pubkey)
-}
+// pub(crate) async fn request_ecdsa_key(
+//     key_name: impl ToString,
+//     path: Vec<u8>,
+// ) -> Result<Pubkey, ExchangeError> {
+//     let args = EcdsaPublicKeyArgument {
+//         canister_id: None,
+//         derivation_path: vec![path],
+//         key_id: EcdsaKeyId {
+//             curve: EcdsaCurve::Secp256k1,
+//             name: key_name.to_string(),
+//         },
+//     };
+//     let res = ecdsa::ecdsa_public_key(args)
+//         .await
+//         .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
+//     let pubkey =
+//         Pubkey::from_raw(res.0.public_key.to_vec()).expect("management api error: invalid pubkey");
+//     Ok(pubkey)
+// }
 
 pub(crate) async fn sign_prehash_with_schnorr(
     digest: impl AsRef<[u8; 32]>,
-    key_name: String,
+    key_name: impl ToString,
     path: Vec<u8>,
 ) -> Result<Vec<u8>, ExchangeError> {
     let args = SignWithSchnorrArgument {
@@ -558,7 +556,7 @@ pub(crate) async fn sign_prehash_with_schnorr(
         derivation_path: vec![path],
         key_id: SchnorrKeyId {
             algorithm: SchnorrAlgorithm::Bip340secp256k1,
-            name: key_name,
+            name: key_name.to_string(),
         },
     };
     let (sig,): (SignWithSchnorrResponse,) = schnorr::sign_with_schnorr(args)
@@ -569,15 +567,18 @@ pub(crate) async fn sign_prehash_with_schnorr(
 
 pub(crate) async fn sign_prehash_with_ecdsa(
     digest: impl AsRef<[u8; 32]>,
-    key_name: String,
+    key_name: impl ToString,
     path: Vec<u8>,
 ) -> Result<Vec<u8>, ExchangeError> {
+    use ic_cdk::api::management_canister::ecdsa::{
+        self, EcdsaCurve, EcdsaKeyId, SignWithEcdsaArgument, SignWithEcdsaResponse,
+    };
     let args = SignWithEcdsaArgument {
         message_hash: digest.as_ref().to_vec(),
         derivation_path: vec![path],
         key_id: EcdsaKeyId {
             curve: EcdsaCurve::Secp256k1,
-            name: key_name,
+            name: key_name.to_string(),
         },
     };
     let (sig,): (SignWithEcdsaResponse,) = ecdsa::sign_with_ecdsa(args)
@@ -586,13 +587,23 @@ pub(crate) async fn sign_prehash_with_ecdsa(
     Ok(sig.signature)
 }
 
-pub(crate) fn create_empty_pool(meta: CoinMeta, pubkey: Pubkey) -> Result<(), ExchangeError> {
+pub(crate) fn create_empty_pool(
+    meta: CoinMeta,
+    pubkey: Pubkey,
+    addr: String,
+) -> Result<(), ExchangeError> {
     if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
-    let pool = LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, DEFAULT_BURN_RATE, pubkey.clone())
-        .expect("didn't set fee rate");
+    let pool = LiquidityPool::new_empty(
+        meta,
+        DEFAULT_FEE_RATE,
+        DEFAULT_BURN_RATE,
+        pubkey.clone(),
+        addr,
+    )
+    .expect("didn't set fee rate");
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, pubkey.clone());
         POOLS.with_borrow_mut(|p| {
@@ -617,7 +628,6 @@ pub(crate) fn sqrt(x: u128) -> u128 {
 
 #[test]
 pub fn ser_deser_pubkey() {
-    use std::str::FromStr;
     let pk = Pubkey::from_str("03b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76");
     assert!(pk.is_ok());
 }

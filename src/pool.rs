@@ -31,6 +31,7 @@ pub struct LiquidityPoolWithState {
     pub fee_rate: u64,
     pub meta: CoinMeta,
     pub pubkey: Pubkey,
+    pub addr: String,
     pub state: Option<PoolState>,
 }
 
@@ -41,6 +42,7 @@ pub struct LiquidityPool {
     pub burn_rate: u64,
     pub meta: CoinMeta,
     pub pubkey: Pubkey,
+    pub addr: String,
 }
 
 impl Into<LiquidityPoolWithState> for LiquidityPool {
@@ -50,6 +52,7 @@ impl Into<LiquidityPoolWithState> for LiquidityPool {
             fee_rate: self.fee_rate,
             meta: self.meta,
             pubkey: self.pubkey,
+            addr: self.addr,
             state,
         }
     }
@@ -128,6 +131,7 @@ impl LiquidityPool {
         fee_rate: u64,
         burn_rate: u64,
         pubkey: Pubkey,
+        addr: String,
     ) -> Option<Self> {
         (fee_rate <= 1_000_000).then(|| ())?;
         (burn_rate <= 1_000_000).then(|| ())?;
@@ -137,6 +141,7 @@ impl LiquidityPool {
             burn_rate,
             meta,
             pubkey,
+            addr,
         })
     }
 
