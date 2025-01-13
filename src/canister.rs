@@ -16,15 +16,19 @@ pub struct InputRune {
     pub tx_id: Txid,
     pub vout: u32,
     pub btc_amount: u64,
-    pub rune_id: Option<CoinId>,
-    pub rune_amount: Option<u128>,
+    pub coin_balance: Option<CoinBalance>,
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct OutputRune {
     pub btc_amount: u64,
-    pub rune_id: Option<CoinId>,
-    pub rune_amount: Option<u128>,
+    pub coin_balance: Option<CoinBalance>,
+}
+
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AssetWithOwner {
+    pub coin_balance: CoinBalance,
+    pub owner_address: String,
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -33,17 +37,18 @@ pub struct ReeInstruction {
     pub method: String,
     pub pool_id: Option<Pubkey>,
     pub nonce: Option<u64>,
-    pub input_coin_balances: Vec<CoinBalance>,
-    pub output_coin_balances: Vec<CoinBalance>,
+    pub input_coins: Vec<AssetWithOwner>,
+    pub output_coins: Vec<AssetWithOwner>,
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct SignPsbtCallingArgs {
+pub struct SignPsbtArgs {
     pub psbt_hex: String,
     pub tx_id: Txid,
     pub instruction: ReeInstruction,
     pub input_runes: Vec<InputRune>,
     pub output_runes: Vec<OutputRune>,
+    pub zero_confirmed_tx_count_in_queue: u32,
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -249,23 +254,24 @@ pub fn finalize_tx(args: FinalizeTxArgs) {
 
 // TODO only called by orchestrator
 #[update]
-pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
-    let SignPsbtCallingArgs {
+pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
+    let SignPsbtArgs {
         psbt_hex,
         tx_id,
         instruction,
         input_runes,
         output_runes,
+        zero_confirmed_tx_count_in_queue: _zero_confirmed_tx_count_in_queue,
     } = args;
     let raw = hex::decode(&psbt_hex).map_err(|_| "invalid psbt".to_string())?;
     let mut psbt = Psbt::deserialize(raw.as_slice()).map_err(|_| "invalid psbt".to_string())?;
     match instruction.method.as_ref() {
         "create_pool" => {
-            (instruction.input_coin_balances.len() == 2)
+            (instruction.input_coins.len() == 2)
                 .then(|| ())
                 .ok_or("invalid input_coin_balances".to_string())?;
-            let x = instruction.input_coin_balances[0].clone();
-            let y = instruction.input_coin_balances[1].clone();
+            let x = instruction.input_coins[0].coin_balance.clone();
+            let y = instruction.input_coins[1].coin_balance.clone();
             let key = pre_create(x, y).await.map_err(|e| e.to_string())?;
             let addr = key.address();
             let rune = if x.id == CoinId::btc() { y.id } else { x.id };
@@ -306,11 +312,11 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             .map_err(|e| e.to_string())?;
         }
         "add_liquidity" => {
-            (instruction.input_coin_balances.len() == 2)
+            (instruction.input_coins.len() == 2)
                 .then(|| ())
                 .ok_or("invalid input_coin_balances".to_string())?;
-            let x = instruction.input_coin_balances[0].clone();
-            let y = instruction.input_coin_balances[1].clone();
+            let x = instruction.input_coins[0].coin_balance.clone();
+            let y = instruction.input_coins[1].coin_balance.clone();
             let pool_id = instruction.pool_id.ok_or("pool_id required".to_string())?;
             let nonce = instruction.nonce.ok_or("nonce required".to_string())?;
             let pool = crate::with_pool(&pool_id, |p| p.clone()).ok_or("pool not found")?;
@@ -460,10 +466,10 @@ pub async fn sign_psbt(args: SignPsbtCallingArgs) -> Result<String, String> {
             .map_err(|e| e.to_string())?;
         }
         "swap" => {
-            (instruction.input_coin_balances.len() == 1)
+            (instruction.input_coins.len() == 1)
                 .then(|| ())
                 .ok_or("invalid input_coin_balances".to_string())?;
-            let input = instruction.input_coin_balances[0].clone();
+            let input = instruction.input_coins[0].coin_balance.clone();
             let pool_id = instruction.pool_id.ok_or("pool_id required".to_string())?;
             let nonce = instruction.nonce.ok_or("nonce required".to_string())?;
             let pool =

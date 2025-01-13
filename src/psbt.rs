@@ -38,20 +38,14 @@ pub(crate) fn inputs(
         let addr = extract_addr(&witness.script_pubkey).ok_or(ExchangeError::InvalidPsbt(
             format!("uncognized input {}", i),
         ))?;
-        match input_rune.rune_id {
-            Some(rune_id) => {
-                let amount = input_rune
-                    .rune_amount
-                    .ok_or(ExchangeError::InvalidPsbt(format!(
-                        "rune amount is required for input {}",
-                        i
-                    )))?;
+        match input_rune.coin_balance {
+            Some(rune) => {
                 let utxo = Utxo {
                     txid: tx_in.previous_output.txid.clone().into(),
                     vout: tx_in.previous_output.vout,
                     balance: CoinBalance {
-                        id: rune_id,
-                        value: amount,
+                        id: rune.id,
+                        value: rune.value,
                     },
                     satoshis: input_rune
                         .btc_amount
@@ -99,20 +93,14 @@ pub(crate) fn outputs(
             .then(|| ())
             .ok_or(ExchangeError::InvalidPsbt("outputs not enough".to_string()))?;
         let output_rune = &output_runes[i];
-        match output_rune.rune_id {
-            Some(rune_id) => {
-                let amount = output_rune
-                    .rune_amount
-                    .ok_or(ExchangeError::InvalidPsbt(format!(
-                        "rune amount is required for output {}",
-                        i
-                    )))?;
+        match output_rune.coin_balance {
+            Some(rune) => {
                 let utxo = Utxo {
                     txid,
                     vout: i as u32,
                     balance: CoinBalance {
-                        id: rune_id,
-                        value: amount,
+                        id: rune.id,
+                        value: rune.value,
                     },
                     satoshis: output_rune
                         .btc_amount
