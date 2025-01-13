@@ -14,8 +14,7 @@ use candid::{
     CandidType, Deserialize,
 };
 use ic_cdk::api::management_canister::schnorr::{
-    self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument, SignWithSchnorrArgument,
-    SignWithSchnorrResponse,
+    self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument,
 };
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
@@ -498,7 +497,7 @@ pub(crate) fn with_pool_name(id: &CoinId) -> Option<Pubkey> {
     POOL_TOKENS.with_borrow(|p| p.get(&id))
 }
 
-fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
+pub(crate) fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
     let secp = Secp256k1::new();
     let (tweaked, _) = untweaked.0.tap_tweak(&secp, None);
     Pubkey::from_raw(tweaked.serialize().to_vec()).expect("tweaked 32bytes; qed")
@@ -522,8 +521,7 @@ pub(crate) async fn request_schnorr_key(
     // TODO assume this is untweaked
     let pubkey = Pubkey::from_raw(res.0.public_key[1..].to_vec())
         .expect("management api error: invalid pubkey");
-    let tweaked = tweak_pubkey_with_empty(pubkey);
-    Ok(tweaked)
+    Ok(pubkey)
 }
 
 // pub(crate) async fn request_ecdsa_key(
@@ -546,23 +544,53 @@ pub(crate) async fn request_schnorr_key(
 //     Ok(pubkey)
 // }
 
+// pub(crate) async fn sign_prehash_with_schnorr(
+//     digest: impl AsRef<[u8; 32]>,
+//     key_name: impl ToString,
+//     path: Vec<u8>,
+// ) -> Result<Vec<u8>, ExchangeError> {
+//     let args = SignWithSchnorrArgument {
+//         message: digest.as_ref().to_vec(),
+//         derivation_path: vec![path],
+//         key_id: SchnorrKeyId {
+//             algorithm: SchnorrAlgorithm::Bip340secp256k1,
+//             name: key_name.to_string(),
+//         },
+//     };
+//     let (sig,): (SignWithSchnorrResponse,) = schnorr::sign_with_schnorr(args)
+//         .await
+//         .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
+//     Ok(sig.signature)
+// }
+
+// pub(crate) async fn sign_prehash_with_schnorr(
+//     digest: impl AsRef<[u8; 32]>,
+//     key_name: impl ToString,
+//     path: Vec<u8>,
+// ) -> Result<Vec<u8>, ExchangeError> {
+//     let args = SignWithSchnorrArgument {
+//         message: digest.as_ref().to_vec(),
+//         derivation_path: vec![path],
+//         key_id: SchnorrKeyId {
+//             algorithm: SchnorrAlgorithm::Bip340secp256k1,
+//             name: key_name.to_string(),
+//         },
+//     };
+//     let (sig,): (SignWithSchnorrResponse,) = schnorr::sign_with_schnorr(args)
+//         .await
+//         .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
+//     Ok(sig.signature)
+// }
+//
 pub(crate) async fn sign_prehash_with_schnorr(
     digest: impl AsRef<[u8; 32]>,
     key_name: impl ToString,
     path: Vec<u8>,
 ) -> Result<Vec<u8>, ExchangeError> {
-    let args = SignWithSchnorrArgument {
-        message: digest.as_ref().to_vec(),
-        derivation_path: vec![path],
-        key_id: SchnorrKeyId {
-            algorithm: SchnorrAlgorithm::Bip340secp256k1,
-            name: key_name.to_string(),
-        },
-    };
-    let (sig,): (SignWithSchnorrResponse,) = schnorr::sign_with_schnorr(args)
+    let signature = chain_key::schnorr_sign(digest.as_ref().to_vec(), path, key_name, None)
         .await
-        .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-    Ok(sig.signature)
+        .map_err(|_| ExchangeError::ChainKeyError)?;
+    Ok(signature)
 }
 
 pub(crate) async fn sign_prehash_with_ecdsa(
@@ -587,27 +615,18 @@ pub(crate) async fn sign_prehash_with_ecdsa(
     Ok(sig.signature)
 }
 
-pub(crate) fn create_empty_pool(
-    meta: CoinMeta,
-    pubkey: Pubkey,
-    addr: String,
-) -> Result<(), ExchangeError> {
+pub(crate) fn create_empty_pool(meta: CoinMeta, untweaked: Pubkey) -> Result<(), ExchangeError> {
     if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
-    let pool = LiquidityPool::new_empty(
-        meta,
-        DEFAULT_FEE_RATE,
-        DEFAULT_BURN_RATE,
-        pubkey.clone(),
-        addr,
-    )
-    .expect("didn't set fee rate");
+    let pool =
+        LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, DEFAULT_BURN_RATE, untweaked.clone())
+            .expect("didn't set fee rate");
     POOL_TOKENS.with_borrow_mut(|l| {
-        l.insert(id, pubkey.clone());
+        l.insert(id, untweaked.clone());
         POOLS.with_borrow_mut(|p| {
-            p.insert(pubkey, pool);
+            p.insert(untweaked, pool);
         });
     });
     Ok(())

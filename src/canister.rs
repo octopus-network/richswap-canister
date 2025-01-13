@@ -120,8 +120,7 @@ pub async fn pre_create(x: CoinBalance, y: CoinBalance) -> Result<Pubkey, Exchan
                 .ok_or(ExchangeError::PoolAlreadyExists)
         }),
         None => {
-            let tweaked_pubkey = crate::request_schnorr_key("key_1", rune_id.to_bytes()).await?;
-            let addr = tweaked_pubkey.address();
+            let untweaked_pubkey = crate::request_schnorr_key("key_1", rune_id.to_bytes()).await?;
             let rune = if x.id == CoinId::btc() { y.id } else { x.id };
             let principal = Principal::from_str(crate::RUNE_INDEXER_CANISTER).unwrap();
             let indexer = RuneIndexer(principal);
@@ -138,8 +137,8 @@ pub async fn pre_create(x: CoinBalance, y: CoinBalance) -> Result<Pubkey, Exchan
                 symbol: name?,
                 min_amount: 1,
             };
-            crate::create_empty_pool(meta, tweaked_pubkey.clone(), addr)?;
-            Ok(tweaked_pubkey)
+            crate::create_empty_pool(meta, untweaked_pubkey.clone())?;
+            Ok(untweaked_pubkey)
         }
     }
 }
@@ -571,10 +570,9 @@ pub async fn manually_transfer(txid: Txid, vout: u32, satoshis: u64) -> Option<S
         )
         .expect("failed to create sighash");
     let pool_id = CoinId::rune(840000, 846);
-    let raw_signature =
-        crate::sign_prehash_with_ecdsa(&sighash, "key_1".to_string(), pool_id.to_bytes())
-            .await
-            .ok()?;
+    let raw_signature = crate::sign_prehash_with_ecdsa(&sighash, "key_1", pool_id.to_bytes())
+        .await
+        .ok()?;
     let signature = bitcoin::ecdsa::Signature {
         signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&raw_signature)
             .expect("assert: chain-key signature is 64-bytes compact format"),

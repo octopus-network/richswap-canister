@@ -1,0 +1,11 @@
+[package]
+name = "chain-key"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+candid = "0.10"
+ic-cdk = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_bytes = "0.11"
+bitcoin = { version = "0.32.4", default-features = false, features = ["base64", "serde"] }

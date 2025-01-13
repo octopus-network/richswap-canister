@@ -27,6 +27,7 @@ ic-stable-structures = "0.6"
 ciborium = "0.2.1"
 rune-indexer = { path = "./crates/rune-indexer" }
 ic-log = { path = "./crates/ic-log" }
+chain-key = { path = "./crates/chain-key" }
 ic-canisters-http-types = { git = "https://github.com/dfinity/ic", tag = "release-2024-03-06_23-01+p2p" }
 ic-canister-log = { git = "https://github.com/dfinity/ic", tag = "release-2024-01-18_23-01" }
 

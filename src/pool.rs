@@ -32,6 +32,7 @@ pub struct LiquidityPoolWithState {
     pub meta: CoinMeta,
     pub pubkey: Pubkey,
     pub addr: String,
+    pub tweaked: Pubkey,
     pub state: Option<PoolState>,
 }
 
@@ -42,6 +43,7 @@ pub struct LiquidityPool {
     pub burn_rate: u64,
     pub meta: CoinMeta,
     pub pubkey: Pubkey,
+    pub tweaked: Pubkey,
     pub addr: String,
 }
 
@@ -52,6 +54,7 @@ impl Into<LiquidityPoolWithState> for LiquidityPool {
             fee_rate: self.fee_rate,
             meta: self.meta,
             pubkey: self.pubkey,
+            tweaked: self.tweaked,
             addr: self.addr,
             state,
         }
@@ -130,17 +133,19 @@ impl LiquidityPool {
         meta: CoinMeta,
         fee_rate: u64,
         burn_rate: u64,
-        pubkey: Pubkey,
-        addr: String,
+        untweaked: Pubkey,
     ) -> Option<Self> {
         (fee_rate <= 1_000_000).then(|| ())?;
         (burn_rate <= 1_000_000).then(|| ())?;
+        let tweaked = crate::tweak_pubkey_with_empty(untweaked.clone());
+        let addr = tweaked.address();
         Some(Self {
             states: vec![],
             fee_rate,
             burn_rate,
             meta,
-            pubkey,
+            pubkey: untweaked,
+            tweaked,
             addr,
         })
     }
