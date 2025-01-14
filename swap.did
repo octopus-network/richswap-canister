@@ -64,8 +64,8 @@ type ReeInstruction = record {
   nonce : opt nat64;
   pool_id : opt text;
 };
-type Result = variant { Ok : LiquidityOffer; Err : ExchangeError };
-type Result_1 = variant { Ok : text; Err : ExchangeError };
+type Result = variant { Ok : text; Err : ExchangeError };
+type Result_1 = variant { Ok : LiquidityOffer; Err : ExchangeError };
 type Result_2 = variant { Ok : SwapOffer; Err : ExchangeError };
 type Result_3 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
 type Result_4 = variant { Ok : text; Err : text };
@@ -91,13 +91,13 @@ type WithdrawalOffer = record {
   user_outputs : vec CoinBalance;
 };
 service : () -> {
+  create : (text) -> (Result);
   finalize_tx : (FinalizeTxArgs) -> ();
   find_pool : (text) -> (opt LiquidityPoolWithState) query;
   get_fee_collector : () -> (text) query;
   list_pools : () -> (vec PoolMeta) query;
   manually_transfer : (text, nat32, nat64) -> (opt text);
-  pre_add_liquidity : (text, CoinBalance) -> (Result) query;
-  pre_create : (CoinBalance, CoinBalance) -> (Result_1);
+  pre_add_liquidity : (text, CoinBalance) -> (Result_1) query;
   pre_swap : (text, CoinBalance) -> (Result_2) query;
   pre_withdraw_liquidity : (text, text) -> (Result_3) query;
   rollback_tx : (FinalizeTxArgs) -> ();

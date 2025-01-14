@@ -28,7 +28,8 @@ use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
 pub const RUNE_INDEXER_CANISTER: &'static str = "o25oi-jaaaa-aaaal-ajj6a-cai";
-pub const DEFAULT_FEE_COLLECTOR: &'static str = "";
+pub const DEFAULT_FEE_COLLECTOR: &'static str =
+    "269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9";
 
 #[derive(Eq, PartialEq, Clone, CandidType, Debug, Deserialize, Serialize)]
 pub struct Output {
