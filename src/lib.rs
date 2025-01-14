@@ -27,7 +27,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
-pub const RUNE_INDEXER_CANISTER: &'static str = "o25oi-jaaaa-aaaal-ajj6a-cai";
+pub const RUNE_INDEXER_CANISTER: &'static str = "kzrva-ziaaa-aaaar-qamyq-cai";
 pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9";
