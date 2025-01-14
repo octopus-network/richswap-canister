@@ -11,7 +11,7 @@ use bitcoin::{
 };
 use candid::{
     types::{Serializer, Type, TypeInner},
-    CandidType, Deserialize,
+    CandidType, Deserialize, Principal,
 };
 use ic_cdk::api::management_canister::schnorr::{
     self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument,
@@ -28,6 +28,7 @@ use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
 pub const RUNE_INDEXER_CANISTER: &'static str = "o25oi-jaaaa-aaaal-ajj6a-cai";
+pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9";
 
@@ -420,6 +421,7 @@ type Memory = VirtualMemory<DefaultMemoryImpl>;
 const POOLS_MEMORY_ID: MemoryId = MemoryId::new(0);
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
 const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
+const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -435,6 +437,10 @@ thread_local! {
 
     static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), Pubkey::from_str(DEFAULT_FEE_COLLECTOR).expect("invalid pubkey: fee collector"))
+                     .expect("fail to init a StableCell"));
+
+    static ORCHESTRATOR: RefCell<Cell<Principal, Memory>> =
+        RefCell::new(Cell::init(with_memory_manager(|m| m.get(ORCHESTRATOR_MEMORY_ID)), Principal::from_str(ORCHESTRATOR_CANISTER).expect("invalid principal: orchestrator"))
                      .expect("fail to init a StableCell"));
 }
 
@@ -639,6 +645,14 @@ pub(crate) fn get_fee_collector() -> Pubkey {
 
 pub(crate) fn set_fee_collector(pubkey: Pubkey) {
     let _ = FEE_COLLECTOR.with(|f| f.borrow_mut().set(pubkey));
+}
+
+pub(crate) fn is_orchestrator(principal: &Principal) -> bool {
+    ORCHESTRATOR.with(|o| o.borrow().get() == principal)
+}
+
+pub(crate) fn set_orchestrator(principal: Principal) {
+    let _ = ORCHESTRATOR.with(|o| o.borrow_mut().set(principal));
 }
 
 /// sqrt(x) * sqrt(x) <= x

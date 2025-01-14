@@ -102,5 +102,6 @@ service : () -> {
   pre_withdraw_liquidity : (text, text) -> (Result_3) query;
   rollback_tx : (FinalizeTxArgs) -> ();
   set_fee_collector : (text) -> ();
+  set_orchestrator : (principal) -> ();
   sign_psbt : (SignPsbtArgs) -> (Result_4);
 }

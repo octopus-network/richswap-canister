@@ -79,9 +79,14 @@ pub fn re_init() {
 #[init]
 pub fn init() {}
 
-#[update]
+#[update(guard = "ensure_owner")]
 pub fn set_fee_collector(pubkey: Pubkey) {
     crate::set_fee_collector(pubkey);
+}
+
+#[update(guard = "ensure_owner")]
+pub fn set_orchestrator(principal: Principal) {
+    crate::set_orchestrator(principal);
 }
 
 #[query]
@@ -220,8 +225,7 @@ pub fn pre_swap(id: Pubkey, input: CoinBalance) -> Result<SwapOffer, ExchangeErr
     })
 }
 
-// TODO only called by orchestrator
-#[update]
+#[update(guard = "ensure_orchestrator")]
 pub fn rollback_tx(args: RollbackTxArgs) {
     if let Err(e) = crate::with_pool_mut(&args.pool_id, |p| {
         let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
@@ -232,8 +236,7 @@ pub fn rollback_tx(args: RollbackTxArgs) {
     }
 }
 
-// TODO only called by orchestrator
-#[update]
+#[update(guard = "ensure_orchestrator")]
 pub fn finalize_tx(args: FinalizeTxArgs) {
     if let Err(e) = crate::with_pool_mut(&args.pool_id, |p| {
         let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
@@ -244,8 +247,7 @@ pub fn finalize_tx(args: FinalizeTxArgs) {
     }
 }
 
-// TODO only called by orchestrator
-#[update]
+#[update(guard = "ensure_orchestrator")]
 pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
     let SignPsbtArgs {
         psbt_hex,
@@ -557,6 +559,12 @@ fn http_request(
 
 fn ensure_owner() -> Result<(), String> {
     ic_cdk::api::is_controller(&ic_cdk::caller())
+        .then(|| ())
+        .ok_or("Access denied".to_string())
+}
+
+fn ensure_orchestrator() -> Result<(), String> {
+    crate::is_orchestrator(&ic_cdk::caller())
         .then(|| ())
         .ok_or("Access denied".to_string())
 }
