@@ -227,20 +227,20 @@ impl LiquidityPool {
     pub(crate) fn available_to_withdraw(
         &self,
         pubkey_hash: impl AsRef<str>,
-    ) -> Result<(u64, CoinBalance, Option<u64>), ExchangeError> {
+    ) -> Result<(u64, CoinBalance), ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let lp = recent_state.lp(pubkey_hash.as_ref());
         (lp != 0).then(|| ()).ok_or(ExchangeError::LpNotFound)?;
         let btc_supply = recent_state.btc_supply();
         let rune_supply = recent_state.rune_supply();
         let sqrt_k = crate::sqrt(recent_state.k);
-        let try_burn = (recent_state.incomes >= CoinMeta::btc().min_amount as u64)
-            .then(|| recent_state.incomes);
+
         if recent_state.lp.len() > 1 {
             // there are still other lps
             let mut btc_delta: u64 = lp
                 .checked_mul(btc_supply as u128)
                 .and_then(|r| r.checked_div(sqrt_k))
+                // improve this?
                 .filter(|btc| *btc >= CoinMeta::btc().min_amount)
                 .ok_or(ExchangeError::TooSmallFunds)?
                 .try_into()
@@ -252,8 +252,7 @@ impl LiquidityPool {
                 .ok_or(ExchangeError::TooSmallFunds)?;
             let btc_remains = recent_state
                 .satoshis()
-                .checked_sub(try_burn.unwrap_or(0))
-                .and_then(|r| r.checked_sub(btc_delta))
+                .checked_sub(btc_delta)
                 .ok_or(ExchangeError::EmptyPool)?;
             if btc_remains < CoinMeta::btc().min_amount as u64 {
                 // reward the dust to the last valid lp
@@ -266,19 +265,15 @@ impl LiquidityPool {
                     id: self.meta.id,
                     value: rune_delta,
                 },
-                try_burn,
             ))
         } else {
             // the last lp
-            // if returns InvalidPool, it is a bug
-            let btc_remains = recent_state
-                .satoshis()
-                .checked_sub(try_burn.unwrap_or(0))
-                .ok_or(ExchangeError::InvalidPool)?;
-            if btc_remains < CoinMeta::btc().min_amount as u64 {
-                // this means satoshis > 546 but total - to_burn < 546
-                return Err(ExchangeError::TooSmallFunds);
-            }
+            let btc_remains = recent_state.incomes;
+            let btc_delta = if btc_remains < CoinMeta::btc().min_amount as u64 {
+                recent_state.satoshis()
+            } else {
+                recent_state.btc_supply()
+            };
             let rune_delta = recent_state
                 .utxo
                 .as_ref()
@@ -286,12 +281,11 @@ impl LiquidityPool {
                 .balance
                 .value;
             Ok((
-                btc_remains,
+                btc_delta,
                 CoinBalance {
                     id: self.meta.id,
                     value: rune_delta,
                 },
-                try_burn,
             ))
         }
     }

@@ -85,7 +85,6 @@ type Utxo = record {
   vout : nat32;
 };
 type WithdrawalOffer = record {
-  incomes : opt CoinBalance;
   nonce : nat64;
   input : Utxo;
   user_outputs : vec CoinBalance;

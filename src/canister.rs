@@ -149,7 +149,6 @@ pub async fn create(rune_id: CoinId) -> Result<Pubkey, ExchangeError> {
 pub struct WithdrawalOffer {
     pub input: Utxo,
     pub user_outputs: Vec<CoinBalance>,
-    pub incomes: Option<CoinBalance>,
     pub nonce: u64,
 }
 
@@ -160,7 +159,7 @@ pub fn pre_withdraw_liquidity(
 ) -> Result<WithdrawalOffer, ExchangeError> {
     crate::with_pool(&pool_id, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let (btc, rune_output, burn) = pool.available_to_withdraw(&user_addr)?;
+        let (btc, rune_output) = pool.available_to_withdraw(&user_addr)?;
         let state = pool.states.last().expect("already checked");
         Ok(WithdrawalOffer {
             input: state.utxo.clone().expect("already checked"),
@@ -171,10 +170,6 @@ pub fn pre_withdraw_liquidity(
                 },
                 rune_output,
             ],
-            incomes: burn.map(|b| CoinBalance {
-                id: CoinId::btc(),
-                value: b as u128,
-            }),
             nonce: state.nonce,
         })
     })
@@ -365,10 +360,10 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 .find(|o| o.0.balance.id == CoinId::btc() && o.1 != pool.addr)
                 .map(|o| o.1)
                 .ok_or("couldn't recognize user pubkey")?;
-            let (btc_delta, rune_delta, to_burn) = pool
+            let (btc_delta, rune_delta) = pool
                 .available_to_withdraw(&user_addr)
                 .map_err(|e| e.to_string())?;
-            let utxo = if btc_delta + to_burn.unwrap_or_default() == state.satoshis() {
+            let utxo = if btc_delta == state.satoshis() {
                 // all btc consumed, no output to pool
                 None
             } else {
@@ -379,20 +374,12 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     .find(|&o| o.0.balance.id == rune_delta.id && o.1 == pool.addr)
                     .map(|o| o.0.clone())
                     .ok_or("output to pool not found".to_string())?;
-                (pool_input.satoshis == pool_output.satoshis + btc_delta + to_burn.unwrap_or(0))
+                (pool_input.satoshis == pool_output.satoshis + btc_delta)
                     .then(|| ())
                     .ok_or("btc input/output mismatch".to_string())?;
                 (pool_input.balance.value == pool_output.balance.value + rune_delta.value)
                     .then(|| ())
                     .ok_or("rune input/output mismatch".to_string())?;
-                let collector_addr = crate::get_fee_collector().address();
-                let burn_output = outputs
-                    .iter()
-                    .find(|&o| o.0.balance.id == CoinId::btc() && o.1 == collector_addr)
-                    .map(|o| o.0.balance.value);
-                (to_burn.unwrap_or(0) as u128 == burn_output.unwrap_or(0))
-                    .then(|| ())
-                    .ok_or("burn output mismatch".to_string())?;
                 Some(pool_output)
             };
             crate::psbt::sign(&mut psbt, &pool)
