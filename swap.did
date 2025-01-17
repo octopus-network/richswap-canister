@@ -50,8 +50,8 @@ type PoolMeta = record {
 };
 type PoolState = record {
   k : nat;
+  id : opt text;
   lp : vec record { text; nat };
-  txid : text;
   utxo : opt Utxo;
   incomes : nat64;
   nonce : nat64;

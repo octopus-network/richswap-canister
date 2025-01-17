@@ -190,11 +190,11 @@ pub fn pre_add_liquidity(
     crate::with_pool(&pool_id, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         let another = pool.liquidity_should_add(side)?;
-        let state = pool.states.last().expect("already checked");
+        let state = pool.states.last().clone();
         Ok(LiquidityOffer {
-            inputs: state.utxo.clone(),
+            inputs: state.map(|s| s.utxo.clone()).flatten(),
             output: another,
-            nonce: state.nonce,
+            nonce: state.map(|s| s.nonce).unwrap_or_default(),
         })
     })
 }
@@ -264,7 +264,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
             let pool_id = instruction.pool_id.ok_or("pool_id required".to_string())?;
             let nonce = instruction.nonce.ok_or("nonce required".to_string())?;
             let pool = crate::with_pool(&pool_id, |p| p.clone()).ok_or("pool not found")?;
-            let mut state = pool.states.last().expect("already checked;qed").clone();
+            let mut state = pool.states.last().cloned().unwrap_or_default();
             (state.nonce == nonce)
                 .then(|| ())
                 .ok_or("pool state expired".to_string())?;
@@ -330,6 +330,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     .or_insert(user_share);
                 state.k = state.rune_supply() * state.btc_supply() as u128;
                 state.nonce += 1;
+                state.id = Some(tx_id);
                 pool.commit(state);
                 Ok(Some(pool))
             })
@@ -396,6 +397,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     state.lp.remove(&user_addr);
                 }
                 state.nonce += 1;
+                state.id = Some(tx_id);
                 pool.commit(state);
                 Ok(Some(pool))
             })
@@ -455,6 +457,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 state.utxo = Some(pool_output);
                 state.nonce += 1;
                 state.incomes += burn;
+                state.id = Some(tx_id);
                 pool.commit(state);
                 Ok(Some(pool))
             })

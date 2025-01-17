@@ -61,10 +61,10 @@ impl Into<LiquidityPoolWithState> for LiquidityPool {
     }
 }
 
-#[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
 pub struct PoolState {
+    pub id: Option<Txid>,
     pub nonce: u64,
-    pub txid: Txid,
     pub utxo: Option<Utxo>,
     pub incomes: u64,
     pub k: u128,
@@ -168,21 +168,25 @@ impl LiquidityPool {
         (side.id == btc_meta.id || side.id == self.meta.id)
             .then(|| ())
             .ok_or(ExchangeError::InvalidPool)?;
-        let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let oppo_id = if side.id == btc_meta.id {
+            self.meta.id
+        } else {
+            btc_meta.id
+        };
+        if self.states.is_empty() {
+            return Ok(CoinBalance {
+                value: 0,
+                id: oppo_id,
+            });
+        }
+        let recent_state = self.states.last().expect("checked;");
         let btc_supply = recent_state.btc_supply();
         let rune_supply = recent_state.rune_supply();
         if btc_supply == 0 || rune_supply == 0 {
-            if side.id == btc_meta.id {
-                return Ok(CoinBalance {
-                    value: 0,
-                    id: self.meta.id,
-                });
-            } else {
-                return Ok(CoinBalance {
-                    value: 0,
-                    id: btc_meta.id,
-                });
-            }
+            return Ok(CoinBalance {
+                value: 0,
+                id: oppo_id,
+            });
         }
         if side.id == btc_meta.id {
             let btc_added: u64 = side.value.try_into().expect("BTC amount overflow");
@@ -370,7 +374,7 @@ impl LiquidityPool {
         let idx = self
             .states
             .iter()
-            .position(|state| state.txid == txid)
+            .position(|state| state.id == Some(txid))
             .ok_or(ExchangeError::InvalidState("txid not found".to_string()))?;
         if idx == 0 {
             self.states.clear();
@@ -384,7 +388,7 @@ impl LiquidityPool {
         let idx = self
             .states
             .iter()
-            .position(|state| state.txid == txid)
+            .position(|state| state.id == Some(txid))
             .ok_or(ExchangeError::InvalidState("txid not found".to_string()))?;
         if idx == 0 {
             return Ok(());
