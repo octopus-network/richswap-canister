@@ -1,31 +1,32 @@
+type AssetWithOwner = record {
+  coin_balance : CoinBalance;
+  owner_address : text;
+};
 type CoinBalance = record { id : text; value : nat };
 type CoinMeta = record { id : text; min_amount : nat; symbol : text };
 type ExchangeError = variant {
   InvalidNumeric;
   Overflow;
   TooSmallFunds;
-  BtcRequired;
+  InvalidRuneId;
   InvalidPool;
   InvalidPsbt : text;
   PoolAlreadyExists;
   InvalidTxid;
   InvalidLiquidity;
   EmptyPool;
-  InvalidRequirements;
   LpNotFound;
-  FeeNotEnough;
   ChainKeyError;
+  FetchRuneIndexerError;
   InvalidState : text;
-  AmountGreaterThanUtxo;
   InsufficientFunds;
 };
 type FinalizeTxArgs = record { tx_id : text; pool_id : text };
 type InputRune = record {
   tx_id : text;
+  coin_balance : opt CoinBalance;
   vout : nat32;
   btc_amount : nat64;
-  rune_amount : opt nat;
-  rune_id : opt text;
 };
 type LiquidityOffer = record {
   output : CoinBalance;
@@ -33,16 +34,14 @@ type LiquidityOffer = record {
   nonce : nat64;
 };
 type LiquidityPoolWithState = record {
+  addr : text;
   meta : CoinMeta;
   pubkey : text;
   state : opt PoolState;
   fee_rate : nat64;
+  tweaked : text;
 };
-type OutputRune = record {
-  btc_amount : nat64;
-  rune_amount : opt nat;
-  rune_id : opt text;
-};
+type OutputRune = record { coin_balance : opt CoinBalance; btc_amount : nat64 };
 type PoolMeta = record {
   id : text;
   name : text;
@@ -51,27 +50,28 @@ type PoolMeta = record {
 };
 type PoolState = record {
   k : nat;
+  id : opt text;
   lp : vec record { text; nat };
-  txid : text;
   utxo : opt Utxo;
   incomes : nat64;
   nonce : nat64;
 };
 type ReeInstruction = record {
+  input_coins : vec AssetWithOwner;
   method : text;
+  output_coins : vec AssetWithOwner;
   exchange_id : text;
-  input_coin_balances : vec CoinBalance;
-  output_coin_balances : vec CoinBalance;
   nonce : opt nat64;
   pool_id : opt text;
 };
-type Result = variant { Ok : LiquidityOffer; Err : ExchangeError };
-type Result_1 = variant { Ok : text; Err : ExchangeError };
+type Result = variant { Ok : text; Err : ExchangeError };
+type Result_1 = variant { Ok : LiquidityOffer; Err : ExchangeError };
 type Result_2 = variant { Ok : SwapOffer; Err : ExchangeError };
 type Result_3 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
 type Result_4 = variant { Ok : text; Err : text };
-type SignPsbtCallingArgs = record {
+type SignPsbtArgs = record {
   tx_id : text;
+  zero_confirmed_tx_count_in_queue : nat32;
   input_runes : vec InputRune;
   output_runes : vec OutputRune;
   instruction : ReeInstruction;
@@ -85,20 +85,23 @@ type Utxo = record {
   vout : nat32;
 };
 type WithdrawalOffer = record {
-  incomes : opt CoinBalance;
   nonce : nat64;
   input : Utxo;
   user_outputs : vec CoinBalance;
 };
 service : () -> {
+  create : (text) -> (Result);
   finalize_tx : (FinalizeTxArgs) -> ();
   find_pool : (text) -> (opt LiquidityPoolWithState) query;
+  get_fee_collector : () -> (text) query;
   list_pools : () -> (vec PoolMeta) query;
   manually_transfer : (text, nat32, nat64) -> (opt text);
-  pre_add_liquidity : (text, CoinBalance) -> (Result) query;
-  pre_create : (CoinBalance, CoinBalance) -> (Result_1);
+  pre_add_liquidity : (text, CoinBalance) -> (Result_1) query;
   pre_swap : (text, CoinBalance) -> (Result_2) query;
   pre_withdraw_liquidity : (text, text) -> (Result_3) query;
   rollback_tx : (FinalizeTxArgs) -> ();
-  sign_psbt : (SignPsbtCallingArgs) -> (Result_4);
+  set_fee_collector : (text) -> ();
+  set_orchestrator : (principal) -> ();
+  sign_psbt : (SignPsbtArgs) -> (Result_4);
+  test_reorg_outputs : () -> ();
 }

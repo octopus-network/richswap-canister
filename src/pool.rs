@@ -31,6 +31,8 @@ pub struct LiquidityPoolWithState {
     pub fee_rate: u64,
     pub meta: CoinMeta,
     pub pubkey: Pubkey,
+    pub addr: String,
+    pub tweaked: Pubkey,
     pub state: Option<PoolState>,
 }
 
@@ -41,6 +43,8 @@ pub struct LiquidityPool {
     pub burn_rate: u64,
     pub meta: CoinMeta,
     pub pubkey: Pubkey,
+    pub tweaked: Pubkey,
+    pub addr: String,
 }
 
 impl Into<LiquidityPoolWithState> for LiquidityPool {
@@ -50,15 +54,17 @@ impl Into<LiquidityPoolWithState> for LiquidityPool {
             fee_rate: self.fee_rate,
             meta: self.meta,
             pubkey: self.pubkey,
+            tweaked: self.tweaked,
+            addr: self.addr,
             state,
         }
     }
 }
 
-#[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
 pub struct PoolState {
+    pub id: Option<Txid>,
     pub nonce: u64,
-    pub txid: Txid,
     pub utxo: Option<Utxo>,
     pub incomes: u64,
     pub k: u128,
@@ -127,16 +133,20 @@ impl LiquidityPool {
         meta: CoinMeta,
         fee_rate: u64,
         burn_rate: u64,
-        pubkey: Pubkey,
+        untweaked: Pubkey,
     ) -> Option<Self> {
         (fee_rate <= 1_000_000).then(|| ())?;
         (burn_rate <= 1_000_000).then(|| ())?;
+        let tweaked = crate::tweak_pubkey_with_empty(untweaked.clone());
+        let addr = tweaked.address();
         Some(Self {
             states: vec![],
             fee_rate,
             burn_rate,
             meta,
-            pubkey,
+            pubkey: untweaked,
+            tweaked,
+            addr,
         })
     }
 
@@ -158,21 +168,25 @@ impl LiquidityPool {
         (side.id == btc_meta.id || side.id == self.meta.id)
             .then(|| ())
             .ok_or(ExchangeError::InvalidPool)?;
-        let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let oppo_id = if side.id == btc_meta.id {
+            self.meta.id
+        } else {
+            btc_meta.id
+        };
+        if self.states.is_empty() {
+            return Ok(CoinBalance {
+                value: 0,
+                id: oppo_id,
+            });
+        }
+        let recent_state = self.states.last().expect("checked;");
         let btc_supply = recent_state.btc_supply();
         let rune_supply = recent_state.rune_supply();
         if btc_supply == 0 || rune_supply == 0 {
-            if side.id == btc_meta.id {
-                return Ok(CoinBalance {
-                    value: 0,
-                    id: self.meta.id,
-                });
-            } else {
-                return Ok(CoinBalance {
-                    value: 0,
-                    id: btc_meta.id,
-                });
-            }
+            return Ok(CoinBalance {
+                value: 0,
+                id: oppo_id,
+            });
         }
         if side.id == btc_meta.id {
             let btc_added: u64 = side.value.try_into().expect("BTC amount overflow");
@@ -217,20 +231,20 @@ impl LiquidityPool {
     pub(crate) fn available_to_withdraw(
         &self,
         pubkey_hash: impl AsRef<str>,
-    ) -> Result<(u64, CoinBalance, Option<u64>), ExchangeError> {
+    ) -> Result<(u64, CoinBalance), ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let lp = recent_state.lp(pubkey_hash.as_ref());
         (lp != 0).then(|| ()).ok_or(ExchangeError::LpNotFound)?;
         let btc_supply = recent_state.btc_supply();
         let rune_supply = recent_state.rune_supply();
         let sqrt_k = crate::sqrt(recent_state.k);
-        let try_burn = (recent_state.incomes >= CoinMeta::btc().min_amount as u64)
-            .then(|| recent_state.incomes);
+
         if recent_state.lp.len() > 1 {
             // there are still other lps
             let mut btc_delta: u64 = lp
                 .checked_mul(btc_supply as u128)
                 .and_then(|r| r.checked_div(sqrt_k))
+                // improve this?
                 .filter(|btc| *btc >= CoinMeta::btc().min_amount)
                 .ok_or(ExchangeError::TooSmallFunds)?
                 .try_into()
@@ -242,8 +256,7 @@ impl LiquidityPool {
                 .ok_or(ExchangeError::TooSmallFunds)?;
             let btc_remains = recent_state
                 .satoshis()
-                .checked_sub(try_burn.unwrap_or(0))
-                .and_then(|r| r.checked_sub(btc_delta))
+                .checked_sub(btc_delta)
                 .ok_or(ExchangeError::EmptyPool)?;
             if btc_remains < CoinMeta::btc().min_amount as u64 {
                 // reward the dust to the last valid lp
@@ -256,19 +269,15 @@ impl LiquidityPool {
                     id: self.meta.id,
                     value: rune_delta,
                 },
-                try_burn,
             ))
         } else {
             // the last lp
-            // if returns InvalidPool, it is a bug
-            let btc_remains = recent_state
-                .satoshis()
-                .checked_sub(try_burn.unwrap_or(0))
-                .ok_or(ExchangeError::InvalidPool)?;
-            if btc_remains < CoinMeta::btc().min_amount as u64 {
-                // this means satoshis > 546 but total - to_burn < 546
-                return Err(ExchangeError::TooSmallFunds);
-            }
+            let btc_remains = recent_state.incomes;
+            let btc_delta = if btc_remains < CoinMeta::btc().min_amount as u64 {
+                recent_state.satoshis()
+            } else {
+                recent_state.btc_supply()
+            };
             let rune_delta = recent_state
                 .utxo
                 .as_ref()
@@ -276,12 +285,11 @@ impl LiquidityPool {
                 .balance
                 .value;
             Ok((
-                btc_remains,
+                btc_delta,
                 CoinBalance {
                     id: self.meta.id,
                     value: rune_delta,
                 },
-                try_burn,
             ))
         }
     }
@@ -366,7 +374,7 @@ impl LiquidityPool {
         let idx = self
             .states
             .iter()
-            .position(|state| state.txid == txid)
+            .position(|state| state.id == Some(txid))
             .ok_or(ExchangeError::InvalidState("txid not found".to_string()))?;
         if idx == 0 {
             self.states.clear();
@@ -380,7 +388,7 @@ impl LiquidityPool {
         let idx = self
             .states
             .iter()
-            .position(|state| state.txid == txid)
+            .position(|state| state.id == Some(txid))
             .ok_or(ExchangeError::InvalidState("txid not found".to_string()))?;
         if idx == 0 {
             return Ok(());
