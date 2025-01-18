@@ -103,4 +103,5 @@ service : () -> {
   set_fee_collector : (text) -> ();
   set_orchestrator : (principal) -> ();
   sign_psbt : (SignPsbtArgs) -> (Result_4);
+  test_reorg_outputs : () -> ();
 }

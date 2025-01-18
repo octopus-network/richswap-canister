@@ -77,14 +77,12 @@ pub async fn schnorr_sign(
     message: Vec<u8>,
     derive_path: Vec<u8>,
     key_id: impl ToString,
-    merkle_tree_root: Option<Vec<u8>>,
+    merkle_root: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
-    let aux = merkle_tree_root
+    let merkle_root_hash = merkle_root
         .map(|bytes| {
             if bytes.len() == 32 || bytes.is_empty() {
-                Ok(SignWithSchnorrAux::Bip341(SignWithBip341Aux {
-                    merkle_root_hash: ByteBuf::from(bytes),
-                }))
+                Ok(ByteBuf::from(bytes))
             } else {
                 Err(format!(
                     "merkle tree root bytes must be 0 or 32 bytes long but got {}",
@@ -92,7 +90,11 @@ pub async fn schnorr_sign(
                 ))
             }
         })
-        .transpose()?;
+        .transpose()?
+        .unwrap_or_default();
+    let aux = Some(SignWithSchnorrAux::Bip341(SignWithBip341Aux {
+        merkle_root_hash,
+    }));
     let request = ManagementCanisterSignatureRequest {
         message,
         derivation_path: vec![derive_path],

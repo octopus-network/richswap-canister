@@ -73,7 +73,7 @@ pub struct PoolMeta {
 
 #[post_upgrade]
 pub fn re_init() {
-    crate::reset_all_pools();
+    // crate::reset_all_pools();
 }
 
 #[init]
@@ -312,9 +312,11 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     .then(|| ())
                     .ok_or("rune input/output mismatch".to_string())?;
             };
-            crate::psbt::sign(&mut psbt, &pool)
-                .await
-                .map_err(|e| e.to_string())?;
+            if let Some(ref utxo) = state.utxo {
+                crate::psbt::sign(&mut psbt, utxo, pool.base_id().to_bytes())
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
             let user_k = btc_delta
                 .value
                 .checked_mul(rune_delta.value)
@@ -383,7 +385,11 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     .ok_or("rune input/output mismatch".to_string())?;
                 Some(pool_output)
             };
-            crate::psbt::sign(&mut psbt, &pool)
+            let pool_utxo = state
+                .utxo
+                .as_ref()
+                .ok_or(ExchangeError::EmptyPool.to_string())?;
+            crate::psbt::sign(&mut psbt, pool_utxo, pool.base_id().to_bytes())
                 .await
                 .map_err(|e| e.to_string())?;
             crate::with_pool_mut(&pool_id, |p| {
@@ -449,7 +455,11 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     .then(|| ())
                     .ok_or("btc input/output mismatch".to_string())?;
             }
-            crate::psbt::sign(&mut psbt, &pool)
+            let pool_utxo = state
+                .utxo
+                .as_ref()
+                .ok_or(ExchangeError::EmptyPool.to_string())?;
+            crate::psbt::sign(&mut psbt, pool_utxo, pool.base_id().to_bytes())
                 .await
                 .map_err(|e| e.to_string())?;
             crate::with_pool_mut(&pool_id, |p| {
