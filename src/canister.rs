@@ -219,13 +219,15 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
     let SignPsbtArgs {
         psbt_hex,
         tx_id,
-        instruction,
+        all_instructions,
+        instruction_index,
         input_runes,
         output_runes,
         zero_confirmed_tx_count_in_queue: _zero_confirmed_tx_count_in_queue,
     } = args;
     let raw = hex::decode(&psbt_hex).map_err(|_| "invalid psbt".to_string())?;
     let mut psbt = Psbt::deserialize(raw.as_slice()).map_err(|_| "invalid psbt".to_string())?;
+    let instruction = all_instructions[instruction_index as usize].clone();
     match instruction.method.as_ref() {
         "add_liquidity" => {
             (instruction.input_coins.len() == 2)
@@ -445,12 +447,9 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 .await
                 .map_err(|e| e.to_string())?;
             crate::with_pool_mut(&pool_key, |p| {
-                let mut pool = p.expect("already checked in available_to_withdraw;qed");
+                let mut pool = p.expect("already checked in extract_fee;qed");
                 state.utxo = utxo;
                 state.k = state.rune_supply() * state.btc_supply() as u128;
-                if state.utxo.is_none() {
-                    state.lp.clear();
-                }
                 state.incomes = 0;
                 state.nonce += 1;
                 state.id = Some(tx_id);
