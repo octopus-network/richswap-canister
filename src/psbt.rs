@@ -1,11 +1,13 @@
-use crate::{
-    canister::{InputRune, OutputRune},
-    CoinBalance, CoinId, ExchangeError, Txid, Utxo,
-};
-use bitcoin::{
-    psbt::Psbt,
-    sighash::{Prevouts, SighashCache},
-    Address, Network, OutPoint, Script, TapSighashType, Witness,
+use crate::{ExchangeError, Utxo};
+use ree_types::{
+    bitcoin::{
+        self,
+        psbt::Psbt,
+        sighash::{Prevouts, SighashCache},
+        Address, Network, OutPoint, Script, TapSighashType, Witness,
+    },
+    exchange_interfaces::{CoinBalance, InputRune, OutputRune},
+    CoinId, Txid,
 };
 
 pub(crate) fn extract_addr(script: &Script) -> Option<String> {

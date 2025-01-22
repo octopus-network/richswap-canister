@@ -22,9 +22,9 @@ serde = { version = "1.0", features = ["derive"] }
 cfg-if = "1.0"
 hex = "0.4"
 lazy_static = "1.5"
-bitcoin = { version = "0.32.4", default-features = false, features = ["base64", "serde"] }
 ic-stable-structures = "0.6"
-ciborium = "0.2.1"
+ciborium = "0.2"
+ree-types = { git = "https://github.com/octopus-network/ree-types.git" }
 rune-indexer = { path = "./crates/rune-indexer" }
 ic-log = { path = "./crates/ic-log" }
 chain-key = { path = "./crates/chain-key" }

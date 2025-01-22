@@ -21,7 +21,12 @@ type ExchangeError = variant {
   InvalidState : text;
   InsufficientFunds;
 };
-type FinalizeTxArgs = record { tx_id : text; pool_id : text };
+type ExtractFeeOffer = record {
+  output : CoinBalance;
+  nonce : nat64;
+  input : Utxo;
+};
+type FinalizeTxArgs = record { tx_id : text; pool_key : text };
 type InputRune = record {
   tx_id : text;
   coin_balance : opt CoinBalance;
@@ -62,19 +67,21 @@ type ReeInstruction = record {
   output_coins : vec AssetWithOwner;
   exchange_id : text;
   nonce : opt nat64;
-  pool_id : opt text;
+  pool_key : opt text;
 };
 type Result = variant { Ok : text; Err : ExchangeError };
 type Result_1 = variant { Ok : LiquidityOffer; Err : ExchangeError };
-type Result_2 = variant { Ok : SwapOffer; Err : ExchangeError };
-type Result_3 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
-type Result_4 = variant { Ok : text; Err : text };
+type Result_2 = variant { Ok : ExtractFeeOffer; Err : ExchangeError };
+type Result_3 = variant { Ok : SwapOffer; Err : ExchangeError };
+type Result_4 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
+type Result_5 = variant { Ok : text; Err : text };
 type SignPsbtArgs = record {
   tx_id : text;
   zero_confirmed_tx_count_in_queue : nat32;
+  instruction_index : nat32;
   input_runes : vec InputRune;
   output_runes : vec OutputRune;
-  instruction : ReeInstruction;
+  all_instructions : vec ReeInstruction;
   psbt_hex : text;
 };
 type SwapOffer = record { output : CoinBalance; nonce : nat64; input : Utxo };
@@ -97,11 +104,11 @@ service : () -> {
   list_pools : () -> (vec PoolMeta) query;
   manually_transfer : (text, nat32, nat64) -> (opt text);
   pre_add_liquidity : (text, CoinBalance) -> (Result_1) query;
-  pre_swap : (text, CoinBalance) -> (Result_2) query;
-  pre_withdraw_liquidity : (text, text) -> (Result_3) query;
+  pre_extract_fee : (text) -> (Result_2) query;
+  pre_swap : (text, CoinBalance) -> (Result_3) query;
+  pre_withdraw_liquidity : (text, text) -> (Result_4) query;
   rollback_tx : (FinalizeTxArgs) -> ();
   set_fee_collector : (text) -> ();
   set_orchestrator : (principal) -> ();
-  sign_psbt : (SignPsbtArgs) -> (Result_4);
-  test_reorg_outputs : () -> ();
+  sign_psbt : (SignPsbtArgs) -> (Result_5);
 }

@@ -1,6 +1,11 @@
-use crate::{CoinBalance, CoinId, ExchangeError, Pubkey, Txid, Utxo};
+use crate::{ExchangeError, Utxo};
 use candid::{CandidType, Deserialize};
 use ic_stable_structures::{storable::Bound, Storable};
+use ree_types::{
+    bitcoin::{Address, Network},
+    exchange_interfaces::CoinBalance,
+    CoinId, Pubkey, Txid,
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -138,7 +143,10 @@ impl LiquidityPool {
         (fee_rate <= 1_000_000).then(|| ())?;
         (burn_rate <= 1_000_000).then(|| ())?;
         let tweaked = crate::tweak_pubkey_with_empty(untweaked.clone());
-        let addr = tweaked.address();
+        let key = ree_types::bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(
+            tweaked.to_x_only_public_key(),
+        );
+        let addr = Address::p2tr_tweaked(key, Network::Bitcoin).to_string();
         Some(Self {
             states: vec![],
             fee_rate,
@@ -226,6 +234,19 @@ impl LiquidityPool {
                 id: btc_meta.id,
             })
         }
+    }
+
+    pub(crate) fn available_to_extract(&self) -> Result<u64, ExchangeError> {
+        let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let btc_supply = recent_state.btc_supply();
+        // TODO improve this
+        (recent_state.incomes >= CoinMeta::btc().min_amount as u64)
+            .then(|| ())
+            .ok_or(ExchangeError::TooSmallFunds)?;
+        (btc_supply < CoinMeta::btc().min_amount as u64 && btc_supply > 0)
+            .then(|| ())
+            .ok_or(ExchangeError::EmptyPool)?;
+        Ok(recent_state.incomes)
     }
 
     pub(crate) fn available_to_withdraw(
