@@ -78,9 +78,10 @@ type Result_5 = variant { Ok : text; Err : text };
 type SignPsbtArgs = record {
   tx_id : text;
   zero_confirmed_tx_count_in_queue : nat32;
+  instruction_index : nat32;
   input_runes : vec InputRune;
   output_runes : vec OutputRune;
-  instruction : ReeInstruction;
+  all_instructions : vec ReeInstruction;
   psbt_hex : text;
 };
 type SwapOffer = record { output : CoinBalance; nonce : nat64; input : Utxo };
