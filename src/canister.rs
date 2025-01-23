@@ -7,7 +7,7 @@ use ic_canister_log::log;
 use ic_cdk_macros::{init, post_upgrade, query, update};
 use ic_log::*;
 use ree_types::{bitcoin::psbt::Psbt, exchange_interfaces::*, CoinId, Pubkey, Txid};
-use rune_indexer::{Result3, Service as RuneIndexer};
+use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
 use std::str::FromStr;
 
@@ -74,17 +74,17 @@ pub async fn create(rune_id: CoinId) -> Result<Pubkey, ExchangeError> {
             let untweaked_pubkey = crate::request_schnorr_key("key_1", rune_id.to_bytes()).await?;
             let principal = Principal::from_str(crate::RUNE_INDEXER_CANISTER).unwrap();
             let indexer = RuneIndexer(principal);
-            let (result,): (Result3,) = indexer
-                .get_rune_entry_by_rune_id(rune_id.to_string())
+            let (entry,): (Option<RuneEntry>,) = indexer
+                .get_rune_by_id(rune_id.to_string())
                 .await
+                .inspect_err(|e| log!(ERROR, "Error fetching rune indexer: {}", e.1))
                 .map_err(|_| ExchangeError::FetchRuneIndexerError)?;
-            let name = match result {
-                Result3::Ok(entry) => Ok(entry.spaced_rune),
-                Result3::Err(_) => Err(ExchangeError::InvalidRuneId),
-            };
+            let name = entry
+                .map(|e| e.spaced_rune)
+                .ok_or(ExchangeError::InvalidRuneId)?;
             let meta = CoinMeta {
                 id: rune_id,
-                symbol: name?,
+                symbol: name,
                 min_amount: 1,
             };
             crate::create_empty_pool(meta, untweaked_pubkey.clone())?;
