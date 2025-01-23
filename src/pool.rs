@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 pub const DEFAULT_FEE_RATE: u64 = 900;
 /// represents 0.2/100 = 2/1_000 = 200/1_000_000
 pub const DEFAULT_BURN_RATE: u64 = 100;
+/// each tx's satoshis should be >= 10000
+pub const MIN_BTC_VALUE: u64 = 10000;
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CoinMeta {
@@ -252,67 +254,73 @@ impl LiquidityPool {
     pub(crate) fn available_to_withdraw(
         &self,
         pubkey_hash: impl AsRef<str>,
-    ) -> Result<(u64, CoinBalance), ExchangeError> {
+        btc_delta: u128,
+    ) -> Result<(u64, CoinBalance, u128), ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let lp = recent_state.lp(pubkey_hash.as_ref());
         (lp != 0).then(|| ()).ok_or(ExchangeError::LpNotFound)?;
+
+        // global
+        let sqrt_k = crate::sqrt(recent_state.k);
         let btc_supply = recent_state.btc_supply();
         let rune_supply = recent_state.rune_supply();
-        let sqrt_k = crate::sqrt(recent_state.k);
 
-        if recent_state.lp.len() > 1 {
-            // there are still other lps
-            let mut btc_delta: u64 = lp
+        let mut btc_delta = btc_delta;
+        // TODO improve this
+        (btc_delta >= CoinMeta::btc().min_amount)
+            .then(|| ())
+            .ok_or(ExchangeError::TooSmallFunds)?;
+
+        let part_k = btc_delta
+            .checked_mul(sqrt_k)
+            .and_then(|m| m.checked_div(btc_supply as u128))
+            .ok_or(ExchangeError::InsufficientFunds)?;
+        (part_k <= lp)
+            .then(|| ())
+            .ok_or(ExchangeError::InsufficientFunds)?;
+
+        let mut rune_delta = part_k
+            .checked_mul(rune_supply)
+            .and_then(|m| m.checked_div(sqrt_k))
+            .filter(|rune| *rune >= self.meta.min_amount)
+            .ok_or(ExchangeError::TooSmallFunds)?;
+        let btc_remains = recent_state
+            .satoshis()
+            .checked_sub(btc_delta as u64)
+            .ok_or(ExchangeError::EmptyPool)?;
+        let mut k = 0u128;
+        if btc_remains < CoinMeta::btc().min_amount as u64 {
+            // reward the dust to the last valid lp
+            btc_delta += btc_remains as u128;
+            rune_delta = rune_supply;
+        } else {
+            let btc_total = lp
                 .checked_mul(btc_supply as u128)
                 .and_then(|r| r.checked_div(sqrt_k))
-                // improve this?
-                .filter(|btc| *btc >= CoinMeta::btc().min_amount)
-                .ok_or(ExchangeError::TooSmallFunds)?
-                .try_into()
-                .map_err(|_| ExchangeError::Overflow)?;
-            let mut rune_delta = lp
+                .ok_or(ExchangeError::InsufficientFunds)?;
+            let rune_total = lp
                 .checked_mul(rune_supply)
                 .and_then(|m| m.checked_div(sqrt_k))
-                .filter(|rune| *rune >= self.meta.min_amount)
-                .ok_or(ExchangeError::TooSmallFunds)?;
-            let btc_remains = recent_state
-                .satoshis()
+                .ok_or(ExchangeError::InsufficientFunds)?;
+            let btc_user_remain = btc_total
                 .checked_sub(btc_delta)
-                .ok_or(ExchangeError::EmptyPool)?;
-            if btc_remains < CoinMeta::btc().min_amount as u64 {
-                // reward the dust to the last valid lp
-                btc_delta += btc_remains;
-                rune_delta = rune_supply;
-            }
-            Ok((
-                btc_delta,
-                CoinBalance {
-                    id: self.meta.id,
-                    value: rune_delta,
-                },
-            ))
-        } else {
-            // the last lp
-            let btc_remains = recent_state.incomes;
-            let btc_delta = if btc_remains < CoinMeta::btc().min_amount as u64 {
-                recent_state.satoshis()
-            } else {
-                recent_state.btc_supply()
-            };
-            let rune_delta = recent_state
-                .utxo
-                .as_ref()
-                .expect("already checked")
-                .balance
-                .value;
-            Ok((
-                btc_delta,
-                CoinBalance {
-                    id: self.meta.id,
-                    value: rune_delta,
-                },
-            ))
+                .ok_or(ExchangeError::InsufficientFunds)?;
+            let rune_user_remain = rune_total
+                .checked_sub(rune_delta)
+                .ok_or(ExchangeError::InsufficientFunds)?;
+            let new_user_share = btc_user_remain
+                .checked_mul(rune_user_remain)
+                .ok_or(ExchangeError::Overflow)?;
+            k = crate::sqrt(new_user_share);
         }
+        Ok((
+            btc_delta.try_into().map_err(|_| ExchangeError::Overflow)?,
+            CoinBalance {
+                id: self.meta.id,
+                value: rune_delta,
+            },
+            k,
+        ))
     }
 
     /// (x - ∆x)(y + ∆y) = xy

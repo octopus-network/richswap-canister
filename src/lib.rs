@@ -68,6 +68,8 @@ pub enum ExchangeError {
     PoolAlreadyExists,
     #[error("the pool has not been initialized or has been removed")]
     EmptyPool,
+    #[error("invalid input coin")]
+    InvalidInput,
     #[error("couldn't derive a chain key for pool")]
     ChainKeyError,
     #[error("invalid psbt: {0}")]

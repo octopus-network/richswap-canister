@@ -7,6 +7,7 @@ type CoinMeta = record { id : text; min_amount : nat; symbol : text };
 type ExchangeError = variant {
   InvalidNumeric;
   Overflow;
+  InvalidInput;
   TooSmallFunds;
   InvalidRuneId;
   InvalidPool;
@@ -33,6 +34,7 @@ type InputRune = record {
   vout : nat32;
   btc_amount : nat64;
 };
+type Liquidity = record { user_share : nat; sqrt_k : nat; btc_supply : nat64 };
 type LiquidityOffer = record {
   output : CoinBalance;
   inputs : opt Utxo;
@@ -70,11 +72,12 @@ type ReeInstruction = record {
   pool_key : opt text;
 };
 type Result = variant { Ok : text; Err : ExchangeError };
-type Result_1 = variant { Ok : LiquidityOffer; Err : ExchangeError };
-type Result_2 = variant { Ok : ExtractFeeOffer; Err : ExchangeError };
-type Result_3 = variant { Ok : SwapOffer; Err : ExchangeError };
-type Result_4 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
-type Result_5 = variant { Ok : text; Err : text };
+type Result_1 = variant { Ok : Liquidity; Err : ExchangeError };
+type Result_2 = variant { Ok : LiquidityOffer; Err : ExchangeError };
+type Result_3 = variant { Ok : ExtractFeeOffer; Err : ExchangeError };
+type Result_4 = variant { Ok : SwapOffer; Err : ExchangeError };
+type Result_5 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
+type Result_6 = variant { Ok : text; Err : text };
 type SignPsbtArgs = record {
   tx_id : text;
   zero_confirmed_tx_count_in_queue : nat32;
@@ -101,14 +104,15 @@ service : () -> {
   finalize_tx : (FinalizeTxArgs) -> ();
   find_pool : (text) -> (opt LiquidityPoolWithState) query;
   get_fee_collector : () -> (text) query;
+  get_lp : (text, text) -> (Result_1) query;
   list_pools : () -> (vec PoolMeta) query;
   manually_transfer : (text, nat32, nat64) -> (opt text);
-  pre_add_liquidity : (text, CoinBalance) -> (Result_1) query;
-  pre_extract_fee : (text) -> (Result_2) query;
-  pre_swap : (text, CoinBalance) -> (Result_3) query;
-  pre_withdraw_liquidity : (text, text) -> (Result_4) query;
+  pre_add_liquidity : (text, CoinBalance) -> (Result_2) query;
+  pre_extract_fee : (text) -> (Result_3) query;
+  pre_swap : (text, CoinBalance) -> (Result_4) query;
+  pre_withdraw_liquidity : (text, text, CoinBalance) -> (Result_5) query;
   rollback_tx : (FinalizeTxArgs) -> ();
   set_fee_collector : (text) -> ();
   set_orchestrator : (principal) -> ();
-  sign_psbt : (SignPsbtArgs) -> (Result_5);
+  sign_psbt : (SignPsbtArgs) -> (Result_6);
 }
