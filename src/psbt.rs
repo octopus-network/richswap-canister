@@ -1,3 +1,4 @@
+use ic_canister_log::log;
 use crate::{ExchangeError, Utxo};
 use ree_types::{
     bitcoin::{
@@ -9,6 +10,7 @@ use ree_types::{
     exchange_interfaces::{CoinBalance, InputRune, OutputRune},
     CoinId, Txid,
 };
+use ic_log::INFO;
 
 pub(crate) fn extract_addr(script: &Script) -> Option<String> {
     Address::from_script(script, Network::Bitcoin)
@@ -160,9 +162,11 @@ pub(crate) async fn sign(psbt: &mut Psbt, pool_input: &Utxo, path: Vec<u8>) -> R
                     TapSighashType::Default,
                 )
                 .expect("couldn't construct taproot sighash");
+            log!(INFO, "[latency] request schnorr sign: idx: {:?}, path: {:?}", i, path);
             let raw_sig = crate::sign_prehash_with_schnorr(&sighash, "key_1", path.clone())
                 .await
                 .map_err(|e| e.to_string())?;
+            log!(INFO, "[latency] finish schnorr sign: idx: {:?}, path: {:?}", i, path);
             let inner_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&raw_sig)
                 .expect("assert: chain-key schnorr signature is 64-bytes format");
             let signature = bitcoin::taproot::Signature {
