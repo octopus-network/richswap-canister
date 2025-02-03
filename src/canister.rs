@@ -21,7 +21,7 @@ pub struct PoolMeta {
 
 #[post_upgrade]
 pub fn re_init() {
-    crate::reset_all_pools();
+    // crate::reset_all_pools();
 }
 
 #[init]
@@ -49,8 +49,8 @@ pub fn list_pools() -> Vec<PoolMeta> {
         .filter(|p| !p.states.is_empty())
         .map(|p| PoolMeta {
             id: p.pubkey.clone(),
-            name: Default::default(),
-            address: Default::default(),
+            name: p.meta.symbol.clone(),
+            address: p.addr.clone(),
             coins: vec![CoinId::btc(), p.meta.id],
         })
         .collect()
@@ -118,6 +118,30 @@ pub fn pre_extract_fee(pool_key: Pubkey) -> Result<ExtractFeeOffer, ExchangeErro
 }
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Liquidity {
+    pub btc_supply: u64,
+    pub user_share: u128,
+    pub sqrt_k: u128,
+}
+
+#[query]
+pub fn get_lp(pool_key: Pubkey, user_addr: String) -> Result<Liquidity, ExchangeError> {
+    crate::with_pool(&pool_key, |p| {
+        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
+        pool.states
+            .last()
+            .and_then(|s| {
+                Some(Liquidity {
+                    btc_supply: s.btc_supply(),
+                    user_share: s.lp(&user_addr),
+                    sqrt_k: crate::sqrt(s.k),
+                })
+            })
+            .ok_or(ExchangeError::EmptyPool)
+    })
+}
+
+#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WithdrawalOffer {
     pub input: Utxo,
     pub user_outputs: Vec<CoinBalance>,
@@ -128,10 +152,14 @@ pub struct WithdrawalOffer {
 pub fn pre_withdraw_liquidity(
     pool_key: Pubkey,
     user_addr: String,
+    btc: CoinBalance,
 ) -> Result<WithdrawalOffer, ExchangeError> {
+    (btc.id == CoinId::btc())
+        .then(|| ())
+        .ok_or(ExchangeError::InvalidInput)?;
     crate::with_pool(&pool_key, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let (btc, rune_output) = pool.available_to_withdraw(&user_addr)?;
+        let (btc, rune_output, _) = pool.available_to_withdraw(&user_addr, btc.value)?;
         let state = pool.states.last().expect("already checked");
         Ok(WithdrawalOffer {
             input: state.utxo.clone().expect("already checked"),
@@ -322,6 +350,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
             let pool = crate::with_pool(&pool_key, |p| {
                 p.as_ref().expect("already checked;qed").clone()
             });
+            let btc_to_be_withdrawn = instruction.input_coins[0].coin_balance.clone();
             let mut state = pool
                 .states
                 .last()
@@ -341,8 +370,8 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 .find(|o| o.0.balance.id == CoinId::btc() && o.1 != pool.addr)
                 .map(|o| o.1)
                 .ok_or("couldn't recognize user pubkey")?;
-            let (btc_delta, rune_delta) = pool
-                .available_to_withdraw(&user_addr)
+            let (btc_delta, rune_delta, new_share) = pool
+                .available_to_withdraw(&user_addr, btc_to_be_withdrawn.value)
                 .map_err(|e| e.to_string())?;
             let utxo = if btc_delta == state.satoshis() {
                 // all btc consumed, no output to pool
@@ -378,7 +407,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     state.incomes = 0;
                     state.lp.clear();
                 } else {
-                    state.lp.remove(&user_addr);
+                    state.lp.insert(user_addr, new_share);
                 }
                 state.nonce += 1;
                 state.id = Some(tx_id);
