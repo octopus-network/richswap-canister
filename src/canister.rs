@@ -49,8 +49,8 @@ pub fn list_pools() -> Vec<PoolMeta> {
         .filter(|p| !p.states.is_empty())
         .map(|p| PoolMeta {
             id: p.pubkey.clone(),
-            name: Default::default(),
-            address: Default::default(),
+            name: p.meta.symbol.clone(),
+            address: p.addr.clone(),
             coins: vec![CoinId::btc(), p.meta.id],
         })
         .collect()
