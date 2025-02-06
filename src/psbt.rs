@@ -1,5 +1,6 @@
-use ic_canister_log::log;
 use crate::{ExchangeError, Utxo};
+use ic_canister_log::log;
+use ic_log::INFO;
 use ree_types::{
     bitcoin::{
         self,
@@ -10,7 +11,6 @@ use ree_types::{
     exchange_interfaces::{CoinBalance, InputRune, OutputRune},
     CoinId, Txid,
 };
-use ic_log::INFO;
 
 pub(crate) fn extract_addr(script: &Script) -> Option<String> {
     Address::from_script(script, Network::Bitcoin)
@@ -162,11 +162,21 @@ pub(crate) async fn sign(psbt: &mut Psbt, pool_input: &Utxo, path: Vec<u8>) -> R
                     TapSighashType::Default,
                 )
                 .expect("couldn't construct taproot sighash");
-            log!(INFO, "[latency] request schnorr sign: idx: {:?}, path: {:?}", i, path);
+            log!(
+                INFO,
+                "[latency] request schnorr sign: idx: {:?}, path: {:?}",
+                i,
+                path
+            );
             let raw_sig = crate::sign_prehash_with_schnorr(&sighash, "key_1", path.clone())
                 .await
                 .map_err(|e| e.to_string())?;
-            log!(INFO, "[latency] finish schnorr sign: idx: {:?}, path: {:?}", i, path);
+            log!(
+                INFO,
+                "[latency] finish schnorr sign: idx: {:?}, path: {:?}",
+                i,
+                path
+            );
             let inner_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&raw_sig)
                 .expect("assert: chain-key schnorr signature is 64-bytes format");
             let signature = bitcoin::taproot::Signature {
@@ -177,4 +187,18 @@ pub(crate) async fn sign(psbt: &mut Psbt, pool_input: &Utxo, path: Vec<u8>) -> R
         }
     }
     Ok(())
+}
+
+#[test]
+pub fn test() {
+    let psbt_hex = "70736274ff0100e4020000000247e1db56896d1e2cec0487492ff584600561971419cd4cc14b6327b989d2dbb00200000000ffffffff20ba7f8acf4f9d6ff0f5c182a2c377b7c0eeb02fd3a44781bac82f5efd7e37cc0100000000ffffffff044935000000000000225120e442ca57864860f7f4e46ff3af25b11d962795ff7fbe4479dd6f060addff0cae2202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4ac51b000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a0000000000000000166a5d1300aaa3338101a88c83cc02000000a293c33401000000000001011fc915000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086c02483045022100ca7550752cf861fdae37ec04a5bd8e055d2465fe2224f5c9e99e32c52111d28502202a3edc5f00fb7f0ed8967c22efd030f7f9e63c8d4fbcd9eaea3fc35f75509c3501210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001012b2f40000000000000225120e442ca57864860f7f4e46ff3af25b11d962795ff7fbe4479dd6f060addff0cae0000000000";
+    let psbt_bytes = hex::decode(psbt_hex).expect("Invalid hex");
+    let psbt = ree_types::bitcoin::Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
+
+    for (i, input) in psbt.inputs.iter().enumerate() {
+        let witness = input.witness_utxo.as_ref().expect("");
+        let addr = extract_addr(&witness.script_pubkey).expect("");
+        println!("{} -> {}", i, addr);
+    }
+    assert!(false);
 }

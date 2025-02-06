@@ -4,7 +4,7 @@ use crate::{
 };
 use candid::{CandidType, Deserialize, Principal};
 use ic_canister_log::log;
-use ic_cdk_macros::{init, post_upgrade, query, update};
+use ic_cdk_macros::{query, update};
 use ic_log::*;
 use ree_types::{bitcoin::psbt::Psbt, exchange_interfaces::*, CoinId, Pubkey, Txid};
 use rune_indexer::{RuneEntry, Service as RuneIndexer};
@@ -18,14 +18,6 @@ pub struct PoolMeta {
     pub address: String,
     pub coins: Vec<CoinId>,
 }
-
-#[post_upgrade]
-pub fn re_init() {
-    // crate::reset_all_pools();
-}
-
-#[init]
-pub fn init() {}
 
 #[update(guard = "ensure_owner")]
 pub fn set_fee_collector(pubkey: Pubkey) {
@@ -43,10 +35,12 @@ pub fn get_fee_collector() -> Pubkey {
 }
 
 #[query]
-pub fn list_pools() -> Vec<PoolMeta> {
+pub fn list_pools(from: Option<Pubkey>, limit: u32) -> Vec<PoolMeta> {
     crate::get_pools()
         .iter()
         .filter(|p| !p.states.is_empty())
+        .filter(|p| from.as_ref().map_or(true, |from| p.pubkey > *from))
+        .take(limit as usize)
         .map(|p| PoolMeta {
             id: p.pubkey.clone(),
             name: p.meta.symbol.clone(),
@@ -350,7 +344,12 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
             let pool = crate::with_pool(&pool_key, |p| {
                 p.as_ref().expect("already checked;qed").clone()
             });
-            let btc_to_be_withdrawn = instruction.input_coins[0].coin_balance.clone();
+            let btc_to_be_withdrawn = instruction
+                .output_coins
+                .iter()
+                .find(|c| c.coin_balance.id == CoinId::btc())
+                .map(|c| c.coin_balance.clone())
+                .ok_or("btc output not found in output_coins".to_string())?;
             let mut state = pool
                 .states
                 .last()

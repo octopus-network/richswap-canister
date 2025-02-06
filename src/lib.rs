@@ -270,22 +270,3 @@ pub(crate) fn set_orchestrator(principal: Principal) {
 pub(crate) fn sqrt(x: u128) -> u128 {
     x.isqrt()
 }
-
-#[test]
-pub fn test_derive_p2tr_addr() {
-    use ree_types::bitcoin::XOnlyPublicKey;
-    let x_only_pubkey_hex = "b8dbea6d19d68fdcb70b248db7caeb4f3fcac95673f8877f5d1dcff459adfe76";
-    let x_only_pubkey_bytes = hex::decode(x_only_pubkey_hex).expect("Invalid hex");
-    let untweaked =
-        XOnlyPublicKey::from_slice(&x_only_pubkey_bytes).expect("Invalid x-only pubkey");
-    let wrapped_key = Pubkey::from_raw([&[0x00], &x_only_pubkey_bytes[..]].concat())
-        .expect("tweaked 33bytes; qed");
-    assert_eq!(x_only_pubkey_hex.to_string(), wrapped_key.to_string());
-    let tweaked = tweak_pubkey_with_empty(wrapped_key);
-    let key = ree_types::bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(
-        tweaked.to_x_only_public_key(),
-    );
-    let address0 = Address::p2tr_tweaked(key, Network::Bitcoin);
-    let address1 = Address::p2tr(&Secp256k1::new(), untweaked, None, Network::Bitcoin);
-    assert_eq!(address0.to_string(), address1.to_string());
-}
