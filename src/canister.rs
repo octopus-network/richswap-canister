@@ -1,5 +1,5 @@
 use crate::{
-    pool::{CoinMeta, LiquidityPoolWithState},
+    pool::{self, CoinMeta, LiquidityPoolWithState},
     ExchangeError, Utxo,
 };
 use candid::{CandidType, Deserialize, Principal};
@@ -32,6 +32,11 @@ pub fn set_orchestrator(principal: Principal) {
 #[query]
 pub fn get_fee_collector() -> Pubkey {
     crate::get_fee_collector()
+}
+
+#[query]
+pub fn get_min_tx_value() -> u64 {
+    pool::MIN_BTC_VALUE
 }
 
 #[query]
@@ -271,6 +276,10 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
             } else {
                 (y, x)
             };
+            (btc_delta.value >= pool::MIN_BTC_VALUE as u128)
+                .then(|| ())
+                .ok_or(ExchangeError::TooSmallFunds.to_string())?;
+
             let outputs =
                 crate::psbt::outputs(tx_id, &psbt, &output_runes).map_err(|e| e.to_string())?;
             let pool_output = outputs
@@ -358,6 +367,10 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
             (state.nonce == nonce)
                 .then(|| ())
                 .ok_or("pool state expired".to_string())?;
+            (btc_to_be_withdrawn.value >= pool::MIN_BTC_VALUE as u128)
+                .then(|| ())
+                .ok_or(ExchangeError::TooSmallFunds.to_string())?;
+
             let inputs = crate::psbt::inputs(&psbt, &input_runes).map_err(|e| e.to_string())?;
             let pool_input = inputs
                 .iter()
@@ -441,6 +454,9 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
             let outputs =
                 crate::psbt::outputs(tx_id, &psbt, &output_runes).map_err(|e| e.to_string())?;
             let btc_delta = pool.available_to_extract().map_err(|e| e.to_string())?;
+            (btc_delta >= pool::MIN_BTC_VALUE)
+                .then(|| ())
+                .ok_or(ExchangeError::TooSmallFunds.to_string())?;
             let fee_pubkey = crate::get_fee_collector();
             let fee_output = outputs
                 .iter()
@@ -517,6 +533,9 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 .ok_or("output to pool not found".to_string())?;
             if input.id == CoinId::btc() {
                 let input_btc: u64 = input.value.try_into().expect("BTC amount overflow");
+                (input_btc >= pool::MIN_BTC_VALUE)
+                    .then(|| ())
+                    .ok_or(ExchangeError::TooSmallFunds.to_string())?;
                 // pool - rune, + btc
                 (pool_input.satoshis + input_btc == pool_output.satoshis)
                     .then(|| ())
@@ -530,6 +549,9 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     .then(|| ())
                     .ok_or("rune input/output mismatch".to_string())?;
                 let output_btc: u64 = offer.value.try_into().expect("BTC amount overflow");
+                (output_btc >= pool::MIN_BTC_VALUE)
+                    .then(|| ())
+                    .ok_or(ExchangeError::TooSmallFunds.to_string())?;
                 (pool_input.satoshis - output_btc == pool_output.satoshis)
                     .then(|| ())
                     .ok_or("btc input/output mismatch".to_string())?;

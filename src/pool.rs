@@ -200,17 +200,13 @@ impl LiquidityPool {
         }
         if side.id == btc_meta.id {
             let btc_added: u64 = side.value.try_into().expect("BTC amount overflow");
-            (btc_added > MIN_BTC_VALUE)
-                .then(|| ())
-                .ok_or(ExchangeError::TooSmallFunds)?;
             // btc -> rune: ∆rune = ∆btc * rune / btc
             let rune = side
                 .value
                 .checked_mul(rune_supply)
                 .and_then(|m| m.checked_div(btc_supply as u128))
-                // improve this?
                 .filter(|rune| *rune >= self.meta.min_amount)
-                .ok_or(ExchangeError::TooSmallFunds)?;
+                .ok_or(ExchangeError::EmptyPool)?;
             let new_btc = btc_added + btc_supply;
             rune.checked_add(rune_supply)
                 .and_then(|rune| rune.checked_mul(new_btc as u128))
@@ -227,9 +223,6 @@ impl LiquidityPool {
                 .and_then(|m| m.checked_div(rune_supply))
                 .ok_or(ExchangeError::Overflow)?;
             let btc: u64 = btc128.try_into().expect("BTC amount overflow");
-            (btc > MIN_BTC_VALUE)
-                .then(|| ())
-                .ok_or(ExchangeError::TooSmallFunds)?;
             let new_btc = btc + btc_supply;
             side.value
                 .checked_add(rune_supply)
@@ -246,9 +239,7 @@ impl LiquidityPool {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let btc_supply = recent_state.btc_supply();
         // TODO improve this
-        (recent_state.incomes >= CoinMeta::btc().min_amount as u64)
-            .then(|| ())
-            .ok_or(ExchangeError::TooSmallFunds)?;
+
         (btc_supply < CoinMeta::btc().min_amount as u64 && btc_supply > 0)
             .then(|| ())
             .ok_or(ExchangeError::EmptyPool)?;
@@ -270,10 +261,6 @@ impl LiquidityPool {
         let rune_supply = recent_state.rune_supply();
 
         let mut btc_delta = btc_delta;
-        (btc_delta >= MIN_BTC_VALUE as u128)
-            .then(|| ())
-            .ok_or(ExchangeError::TooSmallFunds)?;
-
         let part_k = btc_delta
             .checked_mul(sqrt_k)
             .and_then(|m| m.checked_div(btc_supply as u128))
@@ -285,8 +272,7 @@ impl LiquidityPool {
         let mut rune_delta = part_k
             .checked_mul(rune_supply)
             .and_then(|m| m.checked_div(sqrt_k))
-            .filter(|rune| *rune >= self.meta.min_amount)
-            .ok_or(ExchangeError::TooSmallFunds)?;
+            .ok_or(ExchangeError::EmptyPool)?;
         let btc_remains = recent_state
             .satoshis()
             .checked_sub(btc_delta as u64)
@@ -346,9 +332,6 @@ impl LiquidityPool {
         if taker.id == CoinId::btc() {
             // btc -> rune
             let input_btc: u64 = taker.value.try_into().expect("BTC amount overflow");
-            (input_btc > MIN_BTC_VALUE)
-                .then(|| ())
-                .ok_or(ExchangeError::TooSmallFunds)?;
             let (input_amount, fee, burn) =
                 Self::charge_fee(input_btc, self.fee_rate, self.burn_rate);
             let rune_remains = btc_supply
@@ -359,9 +342,6 @@ impl LiquidityPool {
                 .then(|| ())
                 .ok_or(ExchangeError::EmptyPool)?;
             let offer = rune_supply - rune_remains;
-            (offer > 0)
-                .then(|| ())
-                .ok_or(ExchangeError::TooSmallFunds)?;
             Ok((
                 CoinBalance {
                     value: offer,
@@ -383,9 +363,6 @@ impl LiquidityPool {
             let btc_remains: u64 = btc_remains.try_into().expect("BTC amount overflow");
             let pre_charge = btc_supply - btc_remains;
             let (offer, fee, burn) = Self::charge_fee(pre_charge, self.fee_rate, self.burn_rate);
-            (offer >= MIN_BTC_VALUE)
-                .then(|| ())
-                .ok_or(ExchangeError::TooSmallFunds)?;
             Ok((
                 CoinBalance {
                     id: btc_meta.id,

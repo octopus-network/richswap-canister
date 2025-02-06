@@ -105,6 +105,7 @@ service : {
   find_pool : (text) -> (opt LiquidityPoolWithState) query;
   get_fee_collector : () -> (text) query;
   get_lp : (text, text) -> (Result_1) query;
+  get_min_tx_value : () -> (nat64) query;
   list_pools : (opt text, nat32) -> (vec PoolMeta) query;
   manually_transfer : (text, nat32, nat64) -> (opt text);
   pre_add_liquidity : (text, CoinBalance) -> (Result_2) query;
