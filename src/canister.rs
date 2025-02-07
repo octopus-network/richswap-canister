@@ -376,14 +376,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
             (btc_to_be_withdrawn.value >= pool::MIN_BTC_VALUE as u128)
                 .then(|| ())
                 .ok_or(ExchangeError::TooSmallFunds.to_string())?;
-
             let inputs = crate::psbt::inputs(&psbt, &input_runes).map_err(|e| e.to_string())?;
-
-            use ic_canister_log::log;
-            use ic_log::INFO;
-            for input in inputs.iter() {
-                log!(INFO, "input: {:?}", input);
-            }
             let pool_input = inputs
                 .iter()
                 .find(|&i| Some(&i.0) == state.utxo.as_ref())
@@ -442,8 +435,12 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 if state.utxo.is_none() {
                     state.incomes = 0;
                     state.lp.clear();
-                } else if new_share != 0 {
-                    state.lp.insert(user_addr, new_share);
+                } else {
+                    if new_share != 0 {
+                        state.lp.insert(user_addr, new_share);
+                    } else {
+                        state.lp.remove(&user_addr);
+                    }
                 }
                 state.nonce += 1;
                 state.id = Some(tx_id);
