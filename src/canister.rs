@@ -41,11 +41,17 @@ pub fn get_min_tx_value() -> u64 {
 
 #[query]
 pub fn list_pools(from: Option<Pubkey>, limit: u32) -> Vec<PoolMeta> {
-    crate::get_pools()
+    let mut pools = crate::get_pools();
+    pools.sort_by(|p0, p1| {
+        let r0 = p0.states.last().map(|s| s.btc_supply()).unwrap_or_default();
+        let r1 = p1.states.last().map(|s| s.btc_supply()).unwrap_or_default();
+        r1.cmp(&r0)
+    });
+    pools
         .iter()
-        .filter(|p| !p.states.is_empty())
-        .filter(|p| from.as_ref().map_or(true, |from| p.pubkey > *from))
-        .take(limit as usize)
+        .skip_while(|p| from.as_ref().map_or(false, |from| p.pubkey != *from))
+        .take(limit as usize + from.as_ref().map_or(0, |_| 1))
+        .skip(from.as_ref().map_or(0, |_| 1))
         .map(|p| PoolMeta {
             id: p.pubkey.clone(),
             name: p.meta.symbol.clone(),
@@ -372,6 +378,12 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 .ok_or(ExchangeError::TooSmallFunds.to_string())?;
 
             let inputs = crate::psbt::inputs(&psbt, &input_runes).map_err(|e| e.to_string())?;
+
+            use ic_canister_log::log;
+            use ic_log::INFO;
+            for input in inputs.iter() {
+                log!(INFO, "input: {:?}", input);
+            }
             let pool_input = inputs
                 .iter()
                 .find(|&i| Some(&i.0) == state.utxo.as_ref())
@@ -382,9 +394,21 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 .find(|o| o.0.balance.id == CoinId::btc() && o.1 != pool.addr)
                 .map(|o| o.1)
                 .ok_or("couldn't recognize user pubkey")?;
-            let (btc_delta, rune_delta, new_share) = pool
-                .available_to_withdraw(&user_addr, btc_to_be_withdrawn.value)
-                .map_err(|e| e.to_string())?;
+            // FIXME this is for compatibility
+            // if a lp would like to withdraw all btc, we should do extra check
+            let (btc_delta, rune_delta, new_share) =
+                if btc_to_be_withdrawn.value == state.satoshis() as u128 {
+                    let lp = state.lp(&user_addr);
+                    let real_btc = lp
+                        .checked_mul(state.btc_supply() as u128)
+                        .and_then(|share| share.checked_div(crate::sqrt(state.k)))
+                        .ok_or(ExchangeError::Overflow.to_string())?;
+                    pool.available_to_withdraw(&user_addr, real_btc)
+                        .map_err(|e| e.to_string())?
+                } else {
+                    pool.available_to_withdraw(&user_addr, btc_to_be_withdrawn.value)
+                        .map_err(|e| e.to_string())?
+                };
             let utxo = if btc_delta == state.satoshis() {
                 // all btc consumed, no output to pool
                 None
@@ -418,7 +442,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                 if state.utxo.is_none() {
                     state.incomes = 0;
                     state.lp.clear();
-                } else {
+                } else if new_share != 0 {
                     state.lp.insert(user_addr, new_share);
                 }
                 state.nonce += 1;

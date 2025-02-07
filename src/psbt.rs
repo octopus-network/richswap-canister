@@ -189,16 +189,60 @@ pub(crate) async fn sign(psbt: &mut Psbt, pool_input: &Utxo, path: Vec<u8>) -> R
     Ok(())
 }
 
+use std::str::FromStr;
+
 #[test]
 pub fn test() {
-    let psbt_hex = "70736274ff0100e4020000000247e1db56896d1e2cec0487492ff584600561971419cd4cc14b6327b989d2dbb00200000000ffffffff20ba7f8acf4f9d6ff0f5c182a2c377b7c0eeb02fd3a44781bac82f5efd7e37cc0100000000ffffffff044935000000000000225120e442ca57864860f7f4e46ff3af25b11d962795ff7fbe4479dd6f060addff0cae2202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4ac51b000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a0000000000000000166a5d1300aaa3338101a88c83cc02000000a293c33401000000000001011fc915000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086c02483045022100ca7550752cf861fdae37ec04a5bd8e055d2465fe2224f5c9e99e32c52111d28502202a3edc5f00fb7f0ed8967c22efd030f7f9e63c8d4fbcd9eaea3fc35f75509c3501210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001012b2f40000000000000225120e442ca57864860f7f4e46ff3af25b11d962795ff7fbe4479dd6f060addff0cae0000000000";
-    let psbt_bytes = hex::decode(psbt_hex).expect("Invalid hex");
-    let psbt = ree_types::bitcoin::Psbt::deserialize(psbt_bytes.as_slice()).unwrap();
+    let hex = "70736274ff0100e30200000002f229c48485d3d3dfb9f5d4d2220b1e05a9c34b3ff3897460a1c5d45fc46ada9d0200000000fffffffff229c48485d3d3dfb9f5d4d2220b1e05a9c34b3ff3897460a1c5d45fc46ada9d0100000000ffffffff042043000000000000225120e442ca57864860f7f4e46ff3af25b11d962795ff7fbe4479dd6f060addff0cae2202000000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a7338010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a0000000000000000156a5d1200aaa3338101c3a6dd05000000fe97ab0301000000000001011f201b010000000000160014639985ae746acdfcf3d1e70973bbd42a39690d4a01086c02483045022100c2748a131dda26d071548613cfa9ac304aef4f63cf268b1916030e7dfd3ddf6c02205fc92cc5a1f4e4346bcb66d6fb73754a4823cfe21282c86afda30f04184de9ef01210294c663c9963a3083b6048a235b8a3534f58d06802e1f02de7345d029d83b421a0001012b2f6a000000000000225120e442ca57864860f7f4e46ff3af25b11d962795ff7fbe4479dd6f060addff0cae0000000000";
+    let psbt_hex = hex::decode(hex).unwrap();
+    let psbt = ree_types::bitcoin::Psbt::deserialize(&psbt_hex[..]).unwrap();
+    let runes = vec![
+        InputRune {
+            tx_id: Txid::from_str(
+                "9dda6ac45fd4c5a1607489f33f4bc3a9051e0b22d2d4f5b9dfd3d38584c429f2",
+            )
+            .unwrap(),
+            vout: 2,
+            btc_amount: 100_000,
+            coin_balance: Some(CoinBalance {
+                id: CoinId::btc(),
+                value: 100_000,
+            }),
+        },
+        InputRune {
+            tx_id: Txid::from_str(
+                "9dda6ac45fd4c5a1607489f33f4bc3a9051e0b22d2d4f5b9dfd3d38584c429f2",
+            )
+            .unwrap(),
+            vout: 1,
+            btc_amount: 27183,
+            coin_balance: Some(CoinBalance {
+                id: CoinId::rune(840106, 129),
+                value: 19013441,
+            }),
+        },
+    ];
+    let pool_utxo = Utxo {
+        txid: Txid::from_str("9dda6ac45fd4c5a1607489f33f4bc3a9051e0b22d2d4f5b9dfd3d38584c429f2")
+            .unwrap(),
+        vout: 1,
+        balance: CoinBalance {
+            id: CoinId::rune(840106, 129),
+            value: 19013441,
+        },
+        satoshis: 27183,
+    };
+    let inputs = crate::psbt::inputs(&psbt, &runes).unwrap();
+    let pool_input = inputs
+        .iter()
+        .find(|&i| Some(&i.0) == Some(&pool_utxo))
+        .map(|i| i.0.clone())
+        .ok_or("input of pool not found".to_string())
+        .unwrap();
 
-    for (i, input) in psbt.inputs.iter().enumerate() {
-        let witness = input.witness_utxo.as_ref().expect("");
-        let addr = extract_addr(&witness.script_pubkey).expect("");
-        println!("{} -> {}", i, addr);
+    for i in inputs {
+        println!("{:?}", i);
     }
+    println!("pool => {:?}", pool_input);
     assert!(false);
 }

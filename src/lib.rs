@@ -153,11 +153,6 @@ pub(crate) fn find_pool(pubkey: &Pubkey) -> Option<LiquidityPool> {
     with_pool(pubkey, |p| p.clone())
 }
 
-pub(crate) fn reset_all_pools() {
-    POOLS.with_borrow_mut(|p| p.clear_new());
-    POOL_TOKENS.with_borrow_mut(|p| p.clear_new());
-}
-
 pub(crate) fn has_pool(id: &CoinId) -> bool {
     POOL_TOKENS.with_borrow(|p| p.contains_key(&id))
 }
