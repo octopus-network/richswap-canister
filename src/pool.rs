@@ -256,7 +256,7 @@ impl LiquidityPool {
         (lp != 0).then(|| ()).ok_or(ExchangeError::LpNotFound)?;
 
         // global
-        let sqrt_k = crate::sqrt(recent_state.k);
+        let sqrt_k = crate::sqrt(recent_state.btc_supply() as u128 * recent_state.rune_supply());
         let btc_supply = recent_state.btc_supply();
         let rune_supply = recent_state.rune_supply();
 
@@ -329,6 +329,7 @@ impl LiquidityPool {
         (btc_supply != 0 && rune_supply != 0)
             .then(|| ())
             .ok_or(ExchangeError::EmptyPool)?;
+        let k = recent_state.btc_supply() as u128 * recent_state.rune_supply();
         if taker.id == CoinId::btc() {
             // btc -> rune
             let input_btc: u64 = taker.value.try_into().expect("BTC amount overflow");
@@ -336,7 +337,7 @@ impl LiquidityPool {
                 Self::charge_fee(input_btc, self.fee_rate, self.burn_rate);
             let rune_remains = btc_supply
                 .checked_add(input_amount)
-                .and_then(|sum| recent_state.k.checked_div(sum as u128))
+                .and_then(|sum| k.checked_div(sum as u128))
                 .ok_or(ExchangeError::Overflow)?;
             (rune_remains >= self.meta.min_amount)
                 .then(|| ())
@@ -354,7 +355,7 @@ impl LiquidityPool {
             // rune -> btc
             let btc_remains = rune_supply
                 .checked_add(taker.value)
-                .and_then(|sum| recent_state.k.checked_div(sum))
+                .and_then(|sum| k.checked_div(sum))
                 .ok_or(ExchangeError::Overflow)?;
             // we must ensure that utxo of pool should be >= 546 to hold the dust
             (btc_remains + recent_state.incomes as u128 >= btc_meta.min_amount)

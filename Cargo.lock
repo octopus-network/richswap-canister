@@ -597,6 +597,7 @@ dependencies = [
  "ree-types",
  "rune-indexer",
  "serde",
+ "serde_json",
  "syn 1.0.109",
  "thiserror",
 ]
