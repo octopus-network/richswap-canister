@@ -49,11 +49,29 @@ type LiquidityPoolWithState = record {
   tweaked : text;
 };
 type OutputRune = record { coin_balance : opt CoinBalance; btc_amount : nat64 };
+type PoolInfo = record {
+  id : text;
+  name : text;
+  coins : vec text;
+  utxo : opt Utxo;
+  btc_supply : nat64;
+  attributes : text;
+  address : text;
+  nonce : nat64;
+};
 type PoolMeta = record {
   id : text;
   name : text;
   coins : vec text;
   address : text;
+};
+type PoolOverview = record {
+  id : text;
+  name : text;
+  coins : vec text;
+  btc_supply : nat64;
+  address : text;
+  nonce : nat64;
 };
 type PoolState = record {
   k : nat;
@@ -106,8 +124,9 @@ service : {
   get_fee_collector : () -> (text) query;
   get_lp : (text, text) -> (Result_1) query;
   get_min_tx_value : () -> (nat64) query;
+  get_pool_info : (text) -> (opt PoolInfo) query;
+  get_pool_list : (opt text, nat32) -> (vec PoolOverview) query;
   list_pools : (opt text, nat32) -> (vec PoolMeta) query;
-  manually_transfer : (text, nat32, nat64) -> (opt text);
   pre_add_liquidity : (text, CoinBalance) -> (Result_2) query;
   pre_extract_fee : (text) -> (Result_3) query;
   pre_swap : (text, CoinBalance) -> (Result_4) query;

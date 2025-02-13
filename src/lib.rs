@@ -1,4 +1,3 @@
-#![feature(isqrt)]
 mod canister;
 mod pool;
 mod psbt;

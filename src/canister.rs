@@ -11,6 +11,7 @@ use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
 use std::str::FromStr;
 
+#[deprecated]
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PoolMeta {
     pub id: Pubkey,
@@ -64,6 +65,66 @@ pub fn list_pools(from: Option<Pubkey>, limit: u32) -> Vec<PoolMeta> {
 #[query]
 pub fn find_pool(pool_key: Pubkey) -> Option<LiquidityPoolWithState> {
     crate::find_pool(&pool_key).map(|p| p.into())
+}
+
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PoolOverview {
+    pub id: Pubkey,
+    pub name: String,
+    pub address: String,
+    pub coins: Vec<CoinId>,
+    pub nonce: u64,
+    pub btc_supply: u64,
+}
+
+#[query]
+pub fn get_pool_list(from: Option<Pubkey>, limit: u32) -> Vec<PoolOverview> {
+    let mut pools = crate::get_pools();
+    pools.sort_by(|p0, p1| {
+        let r0 = p0.states.last().map(|s| s.btc_supply()).unwrap_or_default();
+        let r1 = p1.states.last().map(|s| s.btc_supply()).unwrap_or_default();
+        r1.cmp(&r0)
+    });
+    pools
+        .iter()
+        .skip_while(|p| from.as_ref().map_or(false, |from| p.pubkey != *from))
+        .take(limit as usize + from.as_ref().map_or(0, |_| 1))
+        .skip(from.as_ref().map_or(0, |_| 1))
+        .map(|p| PoolOverview {
+            id: p.pubkey.clone(),
+            name: p.meta.symbol.clone(),
+            address: p.addr.clone(),
+            coins: vec![CoinId::btc(), p.meta.id],
+            nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
+            btc_supply: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
+        })
+        .collect()
+}
+
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PoolInfo {
+    pub id: Pubkey,
+    pub name: String,
+    pub address: String,
+    pub coins: Vec<CoinId>,
+    pub nonce: u64,
+    pub btc_supply: u64,
+    pub utxo: Option<Utxo>,
+    pub attributes: String,
+}
+
+#[query]
+pub fn get_pool_info(pool_key: Pubkey) -> Option<PoolInfo> {
+    crate::find_pool(&pool_key).map(|p| PoolInfo {
+        id: p.pubkey.clone(),
+        name: p.meta.symbol.clone(),
+        address: p.addr.clone(),
+        coins: vec![CoinId::btc(), p.meta.id],
+        nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
+        btc_supply: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
+        utxo: p.states.last().and_then(|s| s.utxo.clone()),
+        attributes: p.to_json_string(),
+    })
 }
 
 #[update]
@@ -139,7 +200,7 @@ pub fn get_lp(pool_key: Pubkey, user_addr: String) -> Result<Liquidity, Exchange
                 Some(Liquidity {
                     btc_supply: s.btc_supply(),
                     user_share: s.lp(&user_addr),
-                    sqrt_k: crate::sqrt(s.k),
+                    sqrt_k: crate::sqrt(s.rune_supply() * s.btc_supply() as u128),
                 })
             })
             .ok_or(ExchangeError::EmptyPool)

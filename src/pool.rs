@@ -54,6 +54,18 @@ pub struct LiquidityPool {
     pub addr: String,
 }
 
+impl LiquidityPool {
+    pub fn to_json_string(&self) -> String {
+        let attr = serde_json::json!({
+            "fee_rate": self.fee_rate,
+            "burn_rate": self.burn_rate,
+            "tweaked": self.tweaked.to_string(),
+            "incomes": self.states.last().map(|state| state.incomes).unwrap_or_default(),
+        });
+        serde_json::to_string(&attr).expect("failed to serialize")
+    }
+}
+
 impl Into<LiquidityPoolWithState> for LiquidityPool {
     fn into(self) -> LiquidityPoolWithState {
         let state = self.states.last().cloned();
