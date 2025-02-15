@@ -9,10 +9,10 @@ use ree_types::{
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-/// represents 0.7/100 = 7/1_000 = 700/1_000_000
-pub const DEFAULT_FEE_RATE: u64 = 900;
-/// represents 0.2/100 = 2/1_000 = 200/1_000_000
-pub const DEFAULT_BURN_RATE: u64 = 100;
+/// represents 0.7/100 = 7/1_000 = 7000/1_000_000
+pub const DEFAULT_FEE_RATE: u64 = 7000;
+/// represents 0.2/100 = 2/1_000 = 2000/1_000_000
+pub const DEFAULT_BURN_RATE: u64 = 2000;
 /// each tx's satoshis should be >= 10000
 pub const MIN_BTC_VALUE: u64 = 10000;
 
