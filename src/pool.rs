@@ -3,7 +3,7 @@ use candid::{CandidType, Deserialize};
 use ic_stable_structures::{storable::Bound, Storable};
 use ree_types::{
     bitcoin::{Address, Network},
-    exchange_interfaces::CoinBalance,
+    exchange_interfaces::*,
     CoinId, Pubkey, Txid,
 };
 use serde::Serialize;
@@ -247,6 +247,103 @@ impl LiquidityPool {
         }
     }
 
+    pub(crate) fn validate_adding_liquidity(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<String>,
+        input_coins: Vec<InputCoin>,
+        initiator: String,
+    ) -> Result<(PoolState, Option<Utxo>), ExchangeError> {
+        (input_coins.len() == 2)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "invalid input_coins, add_liquidity requires 2 inputs".to_string(),
+            ))?;
+        let x = input_coins[0].coin.clone();
+        let y = input_coins[1].coin.clone();
+        let mut state = self.states.last().cloned().unwrap_or_default();
+        // check nonce matches
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        // check prev_outpoint matches
+        let pool_utxo = state.utxo.clone();
+        (pool_utxo.as_ref().map(|u| u.outpoint()).as_ref() == pool_utxo_spend.last())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_spend/pool state mismatch".to_string(),
+            ))?;
+        // check output exists
+        let pool_new_outpoint = pool_utxo_receive.last().map(|s| s.clone()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_receive not found".to_string()),
+        )?;
+        // check input coins
+        let (btc_input, rune_input) = if x.id == CoinId::btc() && y.id != CoinId::btc() {
+            Ok((x, y))
+        } else if x.id != CoinId::btc() && y.id == CoinId::btc() {
+            Ok((y, x))
+        } else {
+            Err(ExchangeError::InvalidSignPsbtArgs(
+                "Invalid inputs: requires 2 different input coins".to_string(),
+            ))
+        }?;
+        // check minial liquidity
+        (btc_input.value >= MIN_BTC_VALUE as u128)
+            .then(|| ())
+            .ok_or(ExchangeError::TooSmallFunds)?;
+        // y = f(x), x' = f(y'); => x == x' || y == y'
+        let rune_expecting = self.liquidity_should_add(btc_input)?;
+        let btc_expecting = self.liquidity_should_add(rune_input)?;
+        (rune_expecting == rune_input || btc_expecting == btc_input)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "inputs mismatch with pre_add_liquidity".to_string(),
+            ))?;
+        // calculate the pool state
+        let sats_input: u64 = btc_input
+            .value
+            .try_into()
+            .map_err(|_| ExchangeError::Overflow)?;
+        let (btc_output, rune_output) = pool_utxo
+            .as_ref()
+            .map(|u| {
+                (
+                    u.satoshis.checked_add(sats_input),
+                    u.balance.value.checked_add(rune_input.value),
+                )
+            })
+            .unwrap_or_default();
+        let (btc_output, rune_output) = (
+            btc_output.ok_or(ExchangeError::Overflow)?,
+            rune_output.ok_or(ExchangeError::Overflow)?,
+        );
+        let user_k = btc_input
+            .value
+            .checked_mul(rune_input.value)
+            .ok_or(ExchangeError::Overflow)?;
+        let user_share = crate::sqrt(user_k);
+        let pool_output = Utxo::try_from(
+            pool_new_outpoint,
+            CoinBalance {
+                value: rune_output,
+                id: rune_input.id,
+            },
+            btc_output,
+        )?;
+        state.utxo = Some(pool_output);
+        state
+            .lp
+            .entry(initiator)
+            .and_modify(|lp| *lp += user_share)
+            .or_insert(user_share);
+        state.k = state.rune_supply() * state.btc_supply() as u128;
+        state.nonce += 1;
+        state.id = Some(txid);
+        Ok((state, pool_utxo))
+    }
+
     pub(crate) fn available_to_extract(&self) -> Result<u64, ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let btc_supply = recent_state.btc_supply();
@@ -324,6 +421,122 @@ impl LiquidityPool {
         ))
     }
 
+    pub(crate) fn validate_withdrawing_liquidity(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<String>,
+        output_coins: Vec<OutputCoin>,
+        initiator: String,
+    ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (output_coins.len() == 2)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "invalid output_coins, withdraw_liquidity requires 2 outputs".to_string(),
+            ))?;
+        let x = output_coins[0].coin.clone();
+        let y = output_coins[1].coin.clone();
+        let (btc_output, rune_output) = if x.id == CoinId::btc() && y.id != CoinId::btc() {
+            Ok((x, y))
+        } else if x.id != CoinId::btc() && y.id == CoinId::btc() {
+            Ok((y, x))
+        } else {
+            Err(ExchangeError::InvalidSignPsbtArgs(
+                "Invalid outputs: requires 2 different output coins".to_string(),
+            ))
+        }?;
+        let pool_prev_outpoint =
+            pool_utxo_spend
+                .last()
+                .map(|s| s.clone())
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_spend not found".to_string(),
+                ))?;
+        let mut state = self.states.last().ok_or(ExchangeError::EmptyPool)?.clone();
+        // check nonce
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        // check prev state
+        let prev_utxo = state.utxo.clone().ok_or(ExchangeError::EmptyPool)?;
+        (prev_utxo.outpoint() == pool_prev_outpoint)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_spend/pool_state don't match".to_string(),
+            ))?;
+        // chech minial sats
+        (btc_output.value >= MIN_BTC_VALUE as u128)
+            .then(|| ())
+            .ok_or(ExchangeError::TooSmallFunds)?;
+        // chech params
+        let k = state.rune_supply() * state.btc_supply() as u128;
+        let (btc_expecting, rune_expecting, new_share) =
+            // a user wants to withdraw all(including incomes), we must check its share is 100%
+            if btc_output.value == state.satoshis() as u128 {
+                let lp = state.lp(&initiator);
+                let real_btc = lp
+                    .checked_mul(state.btc_supply() as u128)
+                    .and_then(|share| share.checked_div(crate::sqrt(k)))
+                    .ok_or(ExchangeError::Overflow)?;
+                self.available_to_withdraw(&initiator, real_btc)?
+            } else {
+                self.available_to_withdraw(&initiator, btc_output.value)?
+            };
+        let btc_output: u64 = btc_output
+            .value
+            .try_into()
+            .map_err(|_| ExchangeError::Overflow)?;
+        (rune_expecting == rune_output && btc_expecting == btc_output)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "inputs mismatch with pre_withdraw_liquidity".to_string(),
+            ))?;
+        let (pool_btc_output, pool_rune_output) = (
+            prev_utxo
+                .satoshis
+                .checked_sub(btc_output)
+                .ok_or(ExchangeError::Overflow)?,
+            prev_utxo
+                .balance
+                .value
+                .checked_sub(rune_output.value)
+                .ok_or(ExchangeError::Overflow)?,
+        );
+        let pool_should_receive = pool_btc_output != 0 || pool_rune_output != 0;
+        let new_utxo = if pool_should_receive {
+            Some(Utxo::try_from(
+                pool_utxo_receive
+                    .last()
+                    .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                        "pool_utxo_receive not found".to_string(),
+                    ))?,
+                CoinBalance {
+                    id: rune_output.id,
+                    value: pool_rune_output,
+                },
+                pool_btc_output,
+            )?)
+        } else {
+            None
+        };
+        state.utxo = new_utxo;
+        state.k = state.rune_supply() * state.btc_supply() as u128;
+        if state.utxo.is_none() {
+            state.incomes = 0;
+            state.lp.clear();
+        } else {
+            if new_share != 0 {
+                state.lp.insert(initiator, new_share);
+            } else {
+                state.lp.remove(&initiator);
+            }
+        }
+        state.nonce += 1;
+        state.id = Some(txid);
+        Ok((state, prev_utxo))
+    }
+
     /// (x - ∆x)(y + ∆y) = xy
     /// => ∆x = x - xy / (y + ∆y)
     ///    p = ∆y / ∆x
@@ -385,6 +598,101 @@ impl LiquidityPool {
                 burn,
             ))
         }
+    }
+
+    pub(crate) fn validate_swap(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<String>,
+        input_coins: Vec<InputCoin>,
+        output_coins: Vec<OutputCoin>,
+    ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (input_coins.len() == 1 && output_coins.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "invalid input/output coins, swap requires 1 input and 1 output".to_string(),
+            ))?;
+        let input = input_coins.first().clone().expect("checked;qed");
+        let output = output_coins.first().clone().expect("checked;qed");
+        let mut state = self
+            .states
+            .last()
+            .cloned()
+            .ok_or(ExchangeError::EmptyPool)?;
+        // check nonce
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        let prev_outpoint =
+            pool_utxo_spend
+                .last()
+                .map(|s| s.clone())
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_spend not found".to_string(),
+                ))?;
+        let prev_utxo = state.utxo.clone().ok_or(ExchangeError::EmptyPool)?;
+        (prev_outpoint == prev_utxo.outpoint()).then(|| ()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
+        )?;
+        // chech minimal sats
+        let (offer, _, burn) = self.available_to_swap(input.coin)?;
+        let (btc_output, rune_output) = if input.coin.id == CoinId::btc() {
+            let input_btc: u64 = input
+                .coin
+                .value
+                .try_into()
+                .map_err(|_| ExchangeError::Overflow)?;
+            (input_btc >= MIN_BTC_VALUE)
+                .then(|| ())
+                .ok_or(ExchangeError::TooSmallFunds)?;
+            // assume the user inputs were valid
+            (
+                prev_utxo.satoshis.checked_add(input_btc),
+                prev_utxo.balance.value.checked_sub(offer.value),
+            )
+        } else {
+            let output_btc: u64 = offer
+                .value
+                .try_into()
+                .map_err(|_| ExchangeError::Overflow)?;
+            (output_btc >= MIN_BTC_VALUE)
+                .then(|| ())
+                .ok_or(ExchangeError::TooSmallFunds)?;
+            (
+                prev_utxo.satoshis.checked_sub(output_btc),
+                prev_utxo.balance.value.checked_add(input.coin.value),
+            )
+        };
+        // check params
+        (output.coin == offer)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "inputs mismatch with pre_swap".to_string(),
+            ))?;
+        let (btc_output, rune_output) = (
+            btc_output.ok_or(ExchangeError::Overflow)?,
+            rune_output.ok_or(ExchangeError::Overflow)?,
+        );
+        let pool_output = Utxo::try_from(
+            pool_utxo_receive
+                .last()
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_receive not found".to_string(),
+                ))?,
+            CoinBalance {
+                id: self.base_id(),
+                value: rune_output,
+            },
+            btc_output,
+        )?;
+        state.utxo = Some(pool_output);
+        state.nonce += 1;
+        state.incomes += burn;
+        state.k = state.rune_supply() * state.btc_supply() as u128;
+        state.id = Some(txid);
+        Ok((state, prev_utxo))
     }
 
     pub(crate) fn rollback(&mut self, txid: Txid) -> Result<(), ExchangeError> {

@@ -33,12 +33,42 @@ pub struct Output {
     pub pubkey: Pubkey,
 }
 
-#[derive(Eq, CandidType, PartialEq, Clone, Debug, Deserialize, Serialize)]
+#[derive(CandidType, Eq, PartialEq, Clone, Debug, Deserialize, Serialize)]
 pub struct Utxo {
     pub txid: Txid,
     pub vout: u32,
     pub balance: CoinBalance,
     pub satoshis: u64,
+}
+
+impl Utxo {
+    pub fn try_from(
+        outpoint: impl AsRef<str>,
+        rune: CoinBalance,
+        sats: u64,
+    ) -> Result<Self, ExchangeError> {
+        let parts = outpoint.as_ref().split(':').collect::<Vec<_>>();
+        let txid = parts
+            .get(0)
+            .map(|s| Txid::from_str(s).map_err(|_| ExchangeError::InvalidTxid))
+            .transpose()?
+            .ok_or(ExchangeError::InvalidTxid)?;
+        let vout = parts
+            .get(1)
+            .map(|s| s.parse::<u32>().map_err(|_| ExchangeError::InvalidNumeric))
+            .transpose()?
+            .ok_or(ExchangeError::InvalidNumeric)?;
+        Ok(Utxo {
+            txid,
+            vout,
+            balance: rune,
+            satoshis: sats,
+        })
+    }
+
+    pub fn outpoint(&self) -> String {
+        format!("{}:{}", self.txid, self.vout)
+    }
 }
 
 #[derive(Debug, Error, CandidType)]
@@ -75,6 +105,12 @@ pub enum ExchangeError {
     InvalidPsbt(String),
     #[error("invalid pool state: {0}")]
     InvalidState(String),
+    #[error("invalid sign_psbt args: {0}")]
+    InvalidSignPsbtArgs(String),
+    #[error("pool state expired, current = {0}")]
+    PoolStateExpired(u64),
+    #[error("pool address not found")]
+    PoolAddressNotFound,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -83,6 +119,7 @@ const POOLS_MEMORY_ID: MemoryId = MemoryId::new(0);
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
 const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
+const POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -95,6 +132,9 @@ thread_local! {
 
     static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, Pubkey, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_TOKENS_MEMORY_ID))));
+
+    static POOL_ADDR: RefCell<StableBTreeMap<String, Pubkey, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_ADDR_MEMORY_ID))));
 
     static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), Pubkey::from_str(DEFAULT_FEE_COLLECTOR).expect("invalid pubkey: fee collector"))
@@ -158,6 +198,10 @@ pub(crate) fn has_pool(id: &CoinId) -> bool {
 
 pub(crate) fn with_pool_name(id: &CoinId) -> Option<Pubkey> {
     POOL_TOKENS.with_borrow(|p| p.get(&id))
+}
+
+pub(crate) fn with_pool_addr(addr: &String) -> Option<Pubkey> {
+    POOL_ADDR.with_borrow(|p| p.get(addr))
 }
 
 pub(crate) fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
