@@ -34,16 +34,6 @@ impl CoinMeta {
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize)]
-pub struct LiquidityPoolWithState {
-    pub fee_rate: u64,
-    pub meta: CoinMeta,
-    pub pubkey: Pubkey,
-    pub addr: String,
-    pub tweaked: Pubkey,
-    pub state: Option<PoolState>,
-}
-
-#[derive(CandidType, Clone, Debug, Deserialize, Serialize)]
 pub struct LiquidityPool {
     pub states: Vec<PoolState>,
     pub fee_rate: u64,
@@ -55,7 +45,7 @@ pub struct LiquidityPool {
 }
 
 impl LiquidityPool {
-    pub fn to_json_string(&self) -> String {
+    pub fn attrs(&self) -> String {
         let attr = serde_json::json!({
             "fee_rate": self.fee_rate,
             "burn_rate": self.burn_rate,
@@ -63,20 +53,6 @@ impl LiquidityPool {
             "incomes": self.states.last().map(|state| state.incomes).unwrap_or_default(),
         });
         serde_json::to_string(&attr).expect("failed to serialize")
-    }
-}
-
-impl Into<LiquidityPoolWithState> for LiquidityPool {
-    fn into(self) -> LiquidityPoolWithState {
-        let state = self.states.last().cloned();
-        LiquidityPoolWithState {
-            fee_rate: self.fee_rate,
-            meta: self.meta,
-            pubkey: self.pubkey,
-            tweaked: self.tweaked,
-            addr: self.addr,
-            state,
-        }
     }
 }
 
@@ -254,12 +230,14 @@ impl LiquidityPool {
         pool_utxo_spend: Vec<String>,
         pool_utxo_receive: Vec<String>,
         input_coins: Vec<InputCoin>,
+        output_coins: Vec<OutputCoin>,
         initiator: String,
     ) -> Result<(PoolState, Option<Utxo>), ExchangeError> {
-        (input_coins.len() == 2)
+        (input_coins.len() == 2 && output_coins.is_empty())
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
-                "invalid input_coins, add_liquidity requires 2 inputs".to_string(),
+                "invalid input/output_coins, add_liquidity requires 2 inputs and 0 output"
+                    .to_string(),
             ))?;
         let x = input_coins[0].coin.clone();
         let y = input_coins[1].coin.clone();
@@ -348,11 +326,84 @@ impl LiquidityPool {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let btc_supply = recent_state.btc_supply();
         // TODO improve this
-
-        (btc_supply < CoinMeta::btc().min_amount as u64 && btc_supply > 0)
+        (btc_supply >= CoinMeta::btc().min_amount as u64
+            && recent_state.incomes > 0
+            && btc_supply - recent_state.incomes >= CoinMeta::btc().min_amount as u64)
             .then(|| ())
-            .ok_or(ExchangeError::EmptyPool)?;
+            .ok_or(ExchangeError::InvalidLiquidity)?;
         Ok(recent_state.incomes)
+    }
+
+    pub fn validate_extract_fee(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<String>,
+        input_coins: Vec<InputCoin>,
+        output_coins: Vec<OutputCoin>,
+    ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (input_coins.is_empty() && output_coins.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "invalid input/output coins, extract fee requires 0 input and 1 output".to_string(),
+            ))?;
+        let output = output_coins.first().clone().expect("checked;qed");
+        let fee_collector = crate::p2tr_untweaked(&crate::get_fee_collector());
+        (output.coin.id == CoinMeta::btc().id && output.to == fee_collector)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(format!(
+                "invalid output coin, extract fee requires 1 output of BTC to {}",
+                fee_collector
+            )))?;
+        let mut state = self
+            .states
+            .last()
+            .cloned()
+            .ok_or(ExchangeError::EmptyPool)?;
+        // check nonce
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        let prev_outpoint =
+            pool_utxo_spend
+                .last()
+                .map(|s| s.clone())
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_spend not found".to_string(),
+                ))?;
+        let prev_utxo = state.utxo.clone().ok_or(ExchangeError::EmptyPool)?;
+        (prev_outpoint == prev_utxo.outpoint()).then(|| ()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
+        )?;
+        let btc_delta = self.available_to_extract()?;
+        (output.coin.value == btc_delta as u128).then(|| ()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs(
+                "invalid output coin, extract fee requires 1 output of BTC with correct value"
+                    .to_string(),
+            ),
+        )?;
+        let pool_output = if btc_delta == prev_utxo.satoshis {
+            None
+        } else {
+            Some(Utxo::try_from(
+                pool_utxo_receive
+                    .last()
+                    .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                        "pool_utxo_receive not found".to_string(),
+                    ))?,
+                CoinBalance {
+                    id: self.base_id(),
+                    value: prev_utxo.balance.value,
+                },
+                prev_utxo.satoshis - btc_delta,
+            )?)
+        };
+        state.utxo = pool_output;
+        state.incomes = 0;
+        state.nonce += 1;
+        state.id = Some(txid);
+        Ok((state, prev_utxo))
     }
 
     pub(crate) fn available_to_withdraw(
@@ -427,13 +478,15 @@ impl LiquidityPool {
         nonce: u64,
         pool_utxo_spend: Vec<String>,
         pool_utxo_receive: Vec<String>,
+        input_coins: Vec<InputCoin>,
         output_coins: Vec<OutputCoin>,
         initiator: String,
     ) -> Result<(PoolState, Utxo), ExchangeError> {
-        (output_coins.len() == 2)
+        (input_coins.is_empty() && output_coins.len() == 2)
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
-                "invalid output_coins, withdraw_liquidity requires 2 outputs".to_string(),
+                "invalid input/output_coins, withdraw_liquidity requires 0 input and 2 outputs"
+                    .to_string(),
             ))?;
         let x = output_coins[0].coin.clone();
         let y = output_coins[1].coin.clone();

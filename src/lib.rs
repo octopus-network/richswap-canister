@@ -243,28 +243,6 @@ pub(crate) async fn sign_prehash_with_schnorr(
     Ok(signature)
 }
 
-pub(crate) async fn sign_prehash_with_ecdsa(
-    digest: impl AsRef<[u8; 32]>,
-    key_name: impl ToString,
-    path: Vec<u8>,
-) -> Result<Vec<u8>, ExchangeError> {
-    use ic_cdk::api::management_canister::ecdsa::{
-        self, EcdsaCurve, EcdsaKeyId, SignWithEcdsaArgument, SignWithEcdsaResponse,
-    };
-    let args = SignWithEcdsaArgument {
-        message_hash: digest.as_ref().to_vec(),
-        derivation_path: vec![path],
-        key_id: EcdsaKeyId {
-            curve: EcdsaCurve::Secp256k1,
-            name: key_name.to_string(),
-        },
-    };
-    let (sig,): (SignWithEcdsaResponse,) = ecdsa::sign_with_ecdsa(args)
-        .await
-        .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-    Ok(sig.signature)
-}
-
 pub(crate) fn create_empty_pool(meta: CoinMeta, untweaked: Pubkey) -> Result<(), ExchangeError> {
     if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
