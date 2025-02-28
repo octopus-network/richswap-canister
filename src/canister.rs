@@ -1,12 +1,14 @@
 use crate::{
     pool::{self, CoinMeta},
-    ExchangeError, Utxo,
+    ExchangeError,
 };
 use candid::{CandidType, Deserialize, Principal};
 use ic_canister_log::log;
 use ic_cdk_macros::{query, update};
 use ic_log::*;
-use ree_types::{bitcoin::psbt::Psbt, exchange_interfaces::*, CoinId, Pubkey};
+use ree_types::{
+    bitcoin::psbt::Psbt, exchange_interfaces::*, CoinBalance, CoinId, Intention, Pubkey, Utxo,
+};
 use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
 use std::str::FromStr;
@@ -31,18 +33,9 @@ pub fn get_min_tx_value() -> u64 {
     pool::MIN_BTC_VALUE
 }
 
-#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct PoolOverview {
-    pub id: Pubkey,
-    pub name: String,
-    pub address: String,
-    pub coins: Vec<CoinId>,
-    pub nonce: u64,
-    pub btc_supply: u64,
-}
-
 #[query]
-pub fn get_pool_list(from: Option<Pubkey>, limit: u32) -> Vec<PoolOverview> {
+pub fn get_pool_list(args: GetPoolListArgs) -> Vec<PoolOverview> {
+    let GetPoolListArgs { from, limit } = args;
     let mut pools = crate::get_pools();
     pools.sort_by(|p0, p1| {
         let r0 = p0.states.last().map(|s| s.btc_supply()).unwrap_or_default();
@@ -58,35 +51,38 @@ pub fn get_pool_list(from: Option<Pubkey>, limit: u32) -> Vec<PoolOverview> {
             id: p.pubkey.clone(),
             name: p.meta.symbol.clone(),
             address: p.addr.clone(),
-            coins: vec![CoinId::btc(), p.meta.id],
             nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
-            btc_supply: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
+            btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
         })
         .collect()
 }
 
-#[derive(CandidType, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct PoolInfo {
-    pub id: Pubkey,
-    pub name: String,
-    pub address: String,
-    pub coins: Vec<CoinId>,
-    pub nonce: u64,
-    pub btc_supply: u64,
-    pub utxo: Option<Utxo>,
-    pub attributes: String,
-}
-
 #[query]
-pub fn get_pool_info(pool_key: Pubkey) -> Option<PoolInfo> {
+pub fn get_pool_info(args: GetPoolInfoArgs) -> Option<PoolInfo> {
+    let GetPoolInfoArgs { pool_address } = args;
+    let pool_key = crate::with_pool_addr(&pool_address)?;
     crate::find_pool(&pool_key).map(|p| PoolInfo {
         id: p.pubkey.clone(),
         name: p.meta.symbol.clone(),
         address: p.addr.clone(),
-        coins: vec![CoinId::btc(), p.meta.id],
         nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
-        btc_supply: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
-        utxo: p.states.last().and_then(|s| s.utxo.clone()),
+        btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
+        coin_reserved: p
+            .states
+            .last()
+            .map(|s| {
+                vec![CoinBalance {
+                    id: p.meta.id,
+                    value: s.rune_supply() as u128,
+                }]
+            })
+            .unwrap_or_default(),
+        utxos: p
+            .states
+            .last()
+            .and_then(|s| s.utxo.clone())
+            .map(|utxo| vec![utxo])
+            .unwrap_or_default(),
         attributes: p.attrs(),
     })
 }
@@ -102,7 +98,13 @@ pub async fn create(rune_id: CoinId) -> Result<Pubkey, ExchangeError> {
         }),
         None => {
             let untweaked_pubkey = crate::request_schnorr_key("key_1", rune_id.to_bytes()).await?;
-            let principal = Principal::from_str(crate::RUNE_INDEXER_CANISTER).unwrap();
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "testnet")] {
+                    let principal = Principal::from_str(crate::TESTNET_RUNE_INDEXER_CANISTER).unwrap();
+                } else {
+                    let principal = Principal::from_str(crate::RUNE_INDEXER_CANISTER).unwrap();
+                }
+            }
             let indexer = RuneIndexer(principal);
             let (entry,): (Option<RuneEntry>,) = indexer
                 .get_rune_by_id(rune_id.to_string())

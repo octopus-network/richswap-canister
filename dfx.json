@@ -5,6 +5,13 @@
       "candid": "swap.did",
       "package": "rich-swap",
       "type": "rust"
+    },
+    "rich-swap-test": {
+      "gzip": true,
+      "candid": "./swap.did",
+      "type": "custom",
+      "wasm": "target/wasm32-unknown-unknown/release/rich_swap_test.wasm",
+      "build": "cargo build --target wasm32-unknown-unknown --release --features testnet && ic-wasm target/wasm32-unknown-unknown/release/rich_swap.wasm -o target/wasm32-unknown-unknown/release/rich_swap_test.wasm shrink && ic-wasm target/wasm32-unknown-unknown/release/rich_swap_test.wasm -o target/wasm32-unknown-unknown/release/rich_swap_test.wasm metadata candid:service -f swap.did -v public && ic-wasm target/wasm32-unknown-unknown/release/rich_swap_test.wasm -o target/wasm32-unknown-unknown/release/rich_swap_test.wasm metadata supported_certificate_versions -d \"1,2\" -v public"
     }
   },
   "defaults": {

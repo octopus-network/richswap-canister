@@ -33,5 +33,5 @@ ic-canister-log = { git = "https://github.com/dfinity/ic", tag = "release-2024-0
 serde_json = "1.0"
 
 [features]
-dev = []
-default = ["dev"]
+testnet = []
+default = []

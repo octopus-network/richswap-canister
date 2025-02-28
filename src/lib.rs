@@ -13,8 +13,7 @@ use ic_stable_structures::{
 };
 use ree_types::{
     bitcoin::{key::TapTweak, secp256k1::Secp256k1, Address, Network},
-    exchange_interfaces::CoinBalance,
-    CoinId, Pubkey, Txid,
+    CoinBalance, CoinId, Pubkey, Utxo,
 };
 use serde::Serialize;
 use std::cell::RefCell;
@@ -23,6 +22,7 @@ use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
 pub const RUNE_INDEXER_CANISTER: &'static str = "kzrva-ziaaa-aaaar-qamyq-cai";
+pub const TESTNET_RUNE_INDEXER_CANISTER: &'static str = "f2dwm-caaaa-aaaao-qjxlq-cai";
 pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9";
@@ -31,44 +31,6 @@ pub const DEFAULT_FEE_COLLECTOR: &'static str =
 pub struct Output {
     pub balance: CoinBalance,
     pub pubkey: Pubkey,
-}
-
-#[derive(CandidType, Eq, PartialEq, Clone, Debug, Deserialize, Serialize)]
-pub struct Utxo {
-    pub txid: Txid,
-    pub vout: u32,
-    pub balance: CoinBalance,
-    pub satoshis: u64,
-}
-
-impl Utxo {
-    pub fn try_from(
-        outpoint: impl AsRef<str>,
-        rune: CoinBalance,
-        sats: u64,
-    ) -> Result<Self, ExchangeError> {
-        let parts = outpoint.as_ref().split(':').collect::<Vec<_>>();
-        let txid = parts
-            .get(0)
-            .map(|s| Txid::from_str(s).map_err(|_| ExchangeError::InvalidTxid))
-            .transpose()?
-            .ok_or(ExchangeError::InvalidTxid)?;
-        let vout = parts
-            .get(1)
-            .map(|s| s.parse::<u32>().map_err(|_| ExchangeError::InvalidNumeric))
-            .transpose()?
-            .ok_or(ExchangeError::InvalidNumeric)?;
-        Ok(Utxo {
-            txid,
-            vout,
-            balance: rune,
-            satoshis: sats,
-        })
-    }
-
-    pub fn outpoint(&self) -> String {
-        format!("{}:{}", self.txid, self.vout)
-    }
 }
 
 #[derive(Debug, Error, CandidType)]
@@ -251,18 +213,26 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, untweaked: Pubkey) -> Result<(),
     let pool =
         LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, DEFAULT_BURN_RATE, untweaked.clone())
             .expect("didn't set fee rate");
+    let addr = pool.addr.clone();
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, untweaked.clone());
         POOLS.with_borrow_mut(|p| {
-            p.insert(untweaked, pool);
+            p.insert(untweaked.clone(), pool);
         });
+        POOL_ADDR.with_borrow_mut(|p| p.insert(addr, untweaked));
     });
     Ok(())
 }
 
 pub(crate) fn p2tr_untweaked(pubkey: &Pubkey) -> String {
     let untweaked = pubkey.to_x_only_public_key();
-    let address = Address::p2tr(&Secp256k1::new(), untweaked, None, Network::Bitcoin);
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let address = Address::p2tr(&Secp256k1::new(), untweaked, None, Network::Testnet4);
+        } else {
+            let address = Address::p2tr(&Secp256k1::new(), untweaked, None, Network::Bitcoin);
+        }
+    }
     address.to_string()
 }
 

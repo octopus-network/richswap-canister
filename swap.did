@@ -26,6 +26,8 @@ type ExtractFeeOffer = record {
   input : Utxo;
 };
 type FinalizeTxArgs = record { txid : text; pool_key : text };
+type GetPoolInfoArgs = record { pool_address : text };
+type GetPoolListArgs = record { from : opt text; limit : nat32 };
 type InputCoin = record { coin : CoinBalance; from : text };
 type Intention = record {
   input_coins : vec InputCoin;
@@ -51,18 +53,17 @@ type OutputCoin = record { to : text; coin : CoinBalance };
 type PoolInfo = record {
   id : text;
   name : text;
-  coins : vec text;
-  utxo : opt Utxo;
-  btc_supply : nat64;
+  btc_reserved : nat64;
+  coin_reserved : vec CoinBalance;
   attributes : text;
   address : text;
   nonce : nat64;
+  utxos : vec Utxo;
 };
 type PoolOverview = record {
   id : text;
   name : text;
-  coins : vec text;
-  btc_supply : nat64;
+  btc_reserved : nat64;
   address : text;
   nonce : nat64;
 };
@@ -82,8 +83,8 @@ type SignPsbtArgs = record {
 };
 type SwapOffer = record { output : CoinBalance; nonce : nat64; input : Utxo };
 type Utxo = record {
-  satoshis : nat64;
-  balance : CoinBalance;
+  maybe_rune : opt CoinBalance;
+  sats : nat64;
   txid : text;
   vout : nat32;
 };
@@ -98,8 +99,8 @@ service : {
   get_fee_collector : () -> (text) query;
   get_lp : (text, text) -> (Result_1) query;
   get_min_tx_value : () -> (nat64) query;
-  get_pool_info : (text) -> (opt PoolInfo) query;
-  get_pool_list : (opt text, nat32) -> (vec PoolOverview) query;
+  get_pool_info : (GetPoolInfoArgs) -> (opt PoolInfo) query;
+  get_pool_list : (GetPoolListArgs) -> (vec PoolOverview) query;
   pre_add_liquidity : (text, CoinBalance) -> (Result_2) query;
   pre_extract_fee : (text) -> (Result_3) query;
   pre_swap : (text, CoinBalance) -> (Result_4) query;

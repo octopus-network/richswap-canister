@@ -562,7 +562,7 @@ dependencies = [
 [[package]]
 name = "ree-types"
 version = "0.2.0"
-source = "git+https://github.com/octopus-network/ree-types.git?branch=rivers%2Frevise-ree-instruction#a077901ccf12a406836b7b18d234341d5133ba52"
+source = "git+https://github.com/octopus-network/ree-types.git?branch=rivers%2Frevise-ree-instruction#84fcf18d9e90f275f22069388fdf7c5c520ea290"
 dependencies = [
  "anyhow",
  "bitcoin",
