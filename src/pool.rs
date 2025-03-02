@@ -659,19 +659,24 @@ impl LiquidityPool {
                 .checked_add(taker.value)
                 .and_then(|sum| k.checked_div(sum))
                 .ok_or(ExchangeError::Overflow)?;
-            // we must ensure that utxo of pool should be >= 546 to hold the dust
-            (btc_remains + recent_state.incomes as u128 >= btc_meta.min_amount)
-                .then(|| ())
-                .ok_or(ExchangeError::EmptyPool)?;
+            let min_hold = CoinMeta::btc().min_amount as u64;
             let btc_remains: u64 = btc_remains.try_into().expect("BTC amount overflow");
             let pre_charge = btc_supply - btc_remains;
             let (offer, fee, burn) = Self::charge_fee(pre_charge, self.fee_rate, self.burn_rate);
+            // this is the actual remains
+            let actual_btc_remains = btc_supply - offer;
+            // plus this to ensure the pool remains >= 546
+            let round_to_keep = if actual_btc_remains < min_hold {
+                min_hold - actual_btc_remains
+            } else {
+                0
+            };
             Ok((
                 CoinBalance {
                     id: btc_meta.id,
-                    value: offer as u128,
+                    value: (offer - round_to_keep) as u128,
                 },
-                fee,
+                fee + round_to_keep,
                 burn,
             ))
         }
