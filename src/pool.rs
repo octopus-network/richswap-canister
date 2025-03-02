@@ -337,14 +337,17 @@ impl LiquidityPool {
 
     pub(crate) fn available_to_extract(&self) -> Result<u64, ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let btc_supply = recent_state.btc_supply();
-        // TODO improve this
-        (btc_supply >= CoinMeta::btc().min_amount as u64
-            && recent_state.incomes > 0
-            && btc_supply - recent_state.incomes >= CoinMeta::btc().min_amount as u64)
+        // ensure the incomes could be extracted
+        (recent_state.incomes >= CoinMeta::btc().min_amount as u64)
             .then(|| ())
-            .ok_or(ExchangeError::InvalidLiquidity)?;
-        Ok(recent_state.incomes)
+            .ok_or(ExchangeError::TooSmallFunds)?;
+        let btc_supply = recent_state.btc_supply();
+        let incomes = if btc_supply < CoinMeta::btc().min_amount as u64 {
+            recent_state.incomes + btc_supply
+        } else {
+            recent_state.incomes
+        };
+        Ok(incomes)
     }
 
     pub fn validate_extract_fee(
@@ -416,6 +419,9 @@ impl LiquidityPool {
             )
         };
         state.utxo = pool_output;
+        if state.utxo.is_none() {
+            state.lp.clear();
+        }
         state.incomes = 0;
         state.nonce += 1;
         state.id = Some(txid);
