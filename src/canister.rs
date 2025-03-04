@@ -184,14 +184,11 @@ pub struct WithdrawalOffer {
 pub fn pre_withdraw_liquidity(
     pool_key: Pubkey,
     user_addr: String,
-    btc: CoinBalance,
+    share: u128,
 ) -> Result<WithdrawalOffer, ExchangeError> {
-    (btc.id == CoinId::btc())
-        .then(|| ())
-        .ok_or(ExchangeError::InvalidInput)?;
     crate::with_pool(&pool_key, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let (btc, rune_output, _) = pool.available_to_withdraw(&user_addr, btc.value)?;
+        let (btc, rune_output, _) = pool.available_to_withdraw(&user_addr, share)?;
         let state = pool.states.last().expect("already checked");
         Ok(WithdrawalOffer {
             input: state.utxo.clone().expect("already checked"),

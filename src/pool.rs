@@ -309,11 +309,22 @@ impl LiquidityPool {
                 .checked_add(rune_input.value)
                 .ok_or(ExchangeError::Overflow)?,
         );
-        let user_k = btc_input
-            .value
-            .checked_mul(rune_input.value)
+        let prev_share = state.lp(&initiator);
+        let prev_k = state.rune_supply() * state.btc_supply() as u128;
+        let prev_btc_share = prev_share
+            .checked_mul(state.btc_supply() as u128)
+            .and_then(|m| m.checked_div(crate::sqrt(prev_k)))
+            .ok_or(ExchangeError::InvalidLiquidity)?;
+        let prev_rune_share = prev_share
+            .checked_mul(state.rune_supply() as u128)
+            .and_then(|m| m.checked_div(crate::sqrt(prev_k)))
+            .ok_or(ExchangeError::InvalidLiquidity)?;
+        let new_btc_share = prev_btc_share + btc_input.value;
+        let new_rune_share = prev_rune_share + rune_input.value;
+        let user_k = new_btc_share
+            .checked_mul(new_rune_share)
             .ok_or(ExchangeError::Overflow)?;
-        let user_share = crate::sqrt(user_k);
+        let new_user_share = crate::sqrt(user_k);
         let pool_output = Utxo::try_from(
             pool_new_outpoint,
             Some(CoinBalance {
@@ -324,11 +335,7 @@ impl LiquidityPool {
         )
         .map_err(|_| ExchangeError::InvalidTxid)?;
         state.utxo = Some(pool_output);
-        state
-            .lp
-            .entry(initiator)
-            .and_modify(|lp| *lp += user_share)
-            .or_insert(user_share);
+        state.lp.insert(initiator, new_user_share);
         state.k = state.rune_supply() * state.btc_supply() as u128;
         state.nonce += 1;
         state.id = Some(txid);
@@ -431,33 +438,30 @@ impl LiquidityPool {
     pub(crate) fn available_to_withdraw(
         &self,
         pubkey_hash: impl AsRef<str>,
-        btc_delta: u128,
+        share: u128,
     ) -> Result<(u64, CoinBalance, u128), ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let lp = recent_state.lp(pubkey_hash.as_ref());
-        (lp != 0).then(|| ()).ok_or(ExchangeError::LpNotFound)?;
+        let total_share = recent_state.lp(pubkey_hash.as_ref());
+        (share <= total_share)
+            .then(|| ())
+            .ok_or(ExchangeError::InsufficientFunds)?;
 
         // global
         let sqrt_k = crate::sqrt(recent_state.btc_supply() as u128 * recent_state.rune_supply());
         let btc_supply = recent_state.btc_supply();
         let rune_supply = recent_state.rune_supply();
 
-        let mut btc_delta = btc_delta;
-        let part_k = btc_delta
-            .checked_mul(sqrt_k)
-            .and_then(|m| m.checked_div(btc_supply as u128))
-            .ok_or(ExchangeError::InsufficientFunds)?;
-        (part_k <= lp)
-            .then(|| ())
-            .ok_or(ExchangeError::InsufficientFunds)?;
-
-        let mut rune_delta = part_k
+        let mut rune_delta = share
             .checked_mul(rune_supply)
+            .and_then(|m| m.checked_div(sqrt_k))
+            .ok_or(ExchangeError::EmptyPool)?;
+        let mut btc_delta = share
+            .checked_mul(btc_supply as u128)
             .and_then(|m| m.checked_div(sqrt_k))
             .ok_or(ExchangeError::EmptyPool)?;
         let btc_remains = recent_state
             .satoshis()
-            .checked_sub(btc_delta as u64)
+            .checked_sub(btc_delta.try_into().map_err(|_| ExchangeError::Overflow)?)
             .ok_or(ExchangeError::EmptyPool)?;
         let mut k = 0u128;
         if btc_remains < CoinMeta::btc().min_amount as u64 {
@@ -465,11 +469,11 @@ impl LiquidityPool {
             btc_delta += btc_remains as u128;
             rune_delta = rune_supply;
         } else {
-            let btc_total = lp
+            let btc_total = total_share
                 .checked_mul(btc_supply as u128)
                 .and_then(|r| r.checked_div(sqrt_k))
                 .ok_or(ExchangeError::InsufficientFunds)?;
-            let rune_total = lp
+            let rune_total = total_share
                 .checked_mul(rune_supply)
                 .and_then(|m| m.checked_div(sqrt_k))
                 .ok_or(ExchangeError::InsufficientFunds)?;
@@ -545,18 +549,17 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::TooSmallFunds)?;
         // check params
-        let k = state.rune_supply() * state.btc_supply() as u128;
+        let user_declared_share = btc_output
+            .value
+            .checked_mul(rune_output.value)
+            .ok_or(ExchangeError::Overflow)?;
         let (btc_expecting, rune_expecting, new_share) =
-            // a user wants to withdraw all(including incomes), we must check its share is 100%
+            // a user wants to withdraw all(including incomes), no matter how much it inputs, we treat that it would withdraw_all
             if btc_output.value == state.satoshis() as u128 {
                 let lp = state.lp(&initiator);
-                let real_btc = lp
-                    .checked_mul(state.btc_supply() as u128)
-                    .and_then(|share| share.checked_div(crate::sqrt(k)))
-                    .ok_or(ExchangeError::Overflow)?;
-                self.available_to_withdraw(&initiator, real_btc)?
+                self.available_to_withdraw(&initiator, lp)?
             } else {
-                self.available_to_withdraw(&initiator, btc_output.value)?
+                self.available_to_withdraw(&initiator, user_declared_share)?
             };
         let btc_output: u64 = btc_output
             .value

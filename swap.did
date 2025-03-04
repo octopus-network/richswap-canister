@@ -104,7 +104,7 @@ service : {
   pre_add_liquidity : (text, CoinBalance) -> (Result_2) query;
   pre_extract_fee : (text) -> (Result_3) query;
   pre_swap : (text, CoinBalance) -> (Result_4) query;
-  pre_withdraw_liquidity : (text, text, CoinBalance) -> (Result_5) query;
+  pre_withdraw_liquidity : (text, text, nat) -> (Result_5) query;
   rollback_tx : (FinalizeTxArgs) -> ();
   set_fee_collector : (text) -> ();
   set_orchestrator : (principal) -> ();
