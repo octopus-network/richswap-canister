@@ -48,11 +48,21 @@ pub fn get_pool_list(args: GetPoolListArgs) -> Vec<PoolOverview> {
         .take(limit as usize + from.as_ref().map_or(0, |_| 1))
         .skip(from.as_ref().map_or(0, |_| 1))
         .map(|p| PoolOverview {
-            id: p.pubkey.clone(),
+            key: p.pubkey.clone(),
             name: p.meta.symbol.clone(),
             address: p.addr.clone(),
             nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
             btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
+            coin_reserved: p
+                .states
+                .last()
+                .map(|s| {
+                    vec![CoinBalance {
+                        id: p.meta.id,
+                        value: s.rune_supply() as u128,
+                    }]
+                })
+                .unwrap_or_default(),
         })
         .collect()
 }
@@ -62,7 +72,7 @@ pub fn get_pool_info(args: GetPoolInfoArgs) -> Option<PoolInfo> {
     let GetPoolInfoArgs { pool_address } = args;
     let pool_key = crate::with_pool_addr(&pool_address)?;
     crate::find_pool(&pool_key).map(|p| PoolInfo {
-        id: p.pubkey.clone(),
+        key: p.pubkey.clone(),
         name: p.meta.symbol.clone(),
         address: p.addr.clone(),
         nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),

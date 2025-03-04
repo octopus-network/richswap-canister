@@ -51,7 +51,7 @@ type LiquidityOffer = record {
 };
 type OutputCoin = record { to : text; coin : CoinBalance };
 type PoolInfo = record {
-  id : text;
+  key : text;
   name : text;
   btc_reserved : nat64;
   coin_reserved : vec CoinBalance;
@@ -61,9 +61,10 @@ type PoolInfo = record {
   utxos : vec Utxo;
 };
 type PoolOverview = record {
-  id : text;
+  key : text;
   name : text;
   btc_reserved : nat64;
+  coin_reserved : vec CoinBalance;
   address : text;
   nonce : nat64;
 };
