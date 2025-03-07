@@ -62,7 +62,10 @@ pub fn get_pool_list(args: GetPoolListArgs) -> Vec<PoolOverview> {
                         value: s.rune_supply() as u128,
                     }]
                 })
-                .unwrap_or_default(),
+                .unwrap_or(vec![CoinBalance {
+                    id: p.meta.id,
+                    value: 0,
+                }]),
         })
         .collect()
 }
@@ -176,7 +179,7 @@ pub fn get_lp(pool_key: Pubkey, user_addr: String) -> Result<Liquidity, Exchange
                 Some(Liquidity {
                     btc_supply: s.btc_supply(),
                     user_share: s.lp(&user_addr),
-                    sqrt_k: crate::sqrt(s.rune_supply() * s.btc_supply() as u128),
+                    sqrt_k: s.total_share(),
                 })
             })
             .ok_or(ExchangeError::EmptyPool)
@@ -297,6 +300,7 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
     let Intention {
         exchange_id: _,
         action: _,
+        action_params,
         pool_address,
         nonce,
         pool_utxo_spend,
@@ -340,6 +344,9 @@ pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
                     nonce,
                     pool_utxo_spend,
                     pool_utxo_receive,
+                    action_params
+                        .parse()
+                        .map_err(|_| "action params \"share\" required")?,
                     input_coins,
                     output_coins,
                     initiator,
