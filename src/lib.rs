@@ -1,4 +1,5 @@
 mod canister;
+mod migrate;
 mod pool;
 mod psbt;
 
@@ -77,17 +78,22 @@ pub enum ExchangeError {
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-const POOLS_MEMORY_ID: MemoryId = MemoryId::new(0);
+const POOLS_MEMORY_ID_V1: MemoryId = MemoryId::new(0);
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
 const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
 const POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
+// migrate from v1 to v2
+const POOLS_MEMORY_ID: MemoryId = MemoryId::new(5);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
 
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
+
+    static POOLS_V1: RefCell<StableBTreeMap<Pubkey, migrate::LiquidityPoolV1, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V1))));
 
     static POOLS: RefCell<StableBTreeMap<Pubkey, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));
@@ -255,4 +261,27 @@ pub(crate) fn set_orchestrator(principal: Principal) {
 /// sqrt(x) * sqrt(x) <= x
 pub(crate) fn sqrt(x: u128) -> u128 {
     x.isqrt()
+}
+
+pub(crate) fn migrate_to_v2() {
+    let is_empty = POOLS.with_borrow(|p| p.is_empty());
+    if !is_empty {
+        return;
+    }
+    POOLS_V1.with(|p| {
+        let pools = p.borrow().iter().map(|p| p.1.clone()).collect::<Vec<_>>();
+        for pool in pools {
+            let pool: LiquidityPool = pool.into();
+            let id = pool.meta.id;
+            let addr = pool.addr.clone();
+            let untweaked = pool.tweaked.clone();
+            POOL_TOKENS.with_borrow_mut(|l| {
+                l.insert(id, untweaked.clone());
+                POOLS.with_borrow_mut(|p| {
+                    p.insert(untweaked.clone(), pool);
+                });
+                POOL_ADDR.with_borrow_mut(|p| p.insert(addr, untweaked));
+            });
+        }
+    });
 }

@@ -561,6 +561,23 @@ dependencies = [
 
 [[package]]
 name = "ree-types"
+version = "0.1.0"
+source = "git+https://github.com/octopus-network/ree-types.git?rev=7342301b63914fa3391c663aee937ed133118805#7342301b63914fa3391c663aee937ed133118805"
+dependencies = [
+ "anyhow",
+ "bitcoin",
+ "candid",
+ "ciborium",
+ "generic-array",
+ "hex",
+ "ic-cdk",
+ "ic-stable-structures",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "ree-types"
 version = "0.2.0"
 source = "git+https://github.com/octopus-network/ree-types.git?rev=a48b38f16efdb1e9703e6e9c45af681ae2b61f59#a48b38f16efdb1e9703e6e9c45af681ae2b61f59"
 dependencies = [
@@ -594,7 +611,8 @@ dependencies = [
  "ic-log",
  "ic-stable-structures",
  "lazy_static",
- "ree-types",
+ "ree-types 0.1.0",
+ "ree-types 0.2.0",
  "rune-indexer",
  "serde",
  "serde_json",
