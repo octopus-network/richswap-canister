@@ -50,7 +50,7 @@ impl LiquidityPool {
             "burn_rate": self.burn_rate,
             "tweaked": self.tweaked.to_string(),
             "incomes": self.states.last().map(|state| state.incomes).unwrap_or_default(),
-            "sqrt_k": self.states.last().map(|state| state.total_share()).unwrap_or_default(),
+            "sqrt_k": self.states.last().map(|state| state.k).unwrap_or_default(),
         });
         serde_json::to_string(&attr).expect("failed to serialize")
     }
