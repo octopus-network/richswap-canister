@@ -185,7 +185,7 @@ pub fn get_lp(pool_key: Pubkey, user_addr: String) -> Result<Liquidity, Exchange
                 Some(Liquidity {
                     btc_supply: s.btc_supply(),
                     user_share: s.lp(&user_addr),
-                    sqrt_k: s.total_share(),
+                    sqrt_k: s.k,
                 })
             })
             .ok_or(ExchangeError::EmptyPool)

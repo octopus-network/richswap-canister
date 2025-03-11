@@ -57,6 +57,7 @@ pub struct PoolStateV1 {
 impl Into<crate::pool::PoolState> for PoolStateV1 {
     fn into(self) -> crate::pool::PoolState {
         let utxo = self.utxo.map(|utxo| utxo.into());
+        let total_share = self.lp.iter().map(|(_, v)| *v).sum::<u128>();
         let lp = self.lp.into_iter().collect();
         crate::pool::PoolState {
             id: self.id.map(|id| {
@@ -66,7 +67,7 @@ impl Into<crate::pool::PoolState> for PoolStateV1 {
             nonce: self.nonce,
             utxo,
             incomes: self.incomes,
-            k: self.k,
+            k: total_share,
             lp,
         }
     }

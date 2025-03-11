@@ -88,10 +88,6 @@ impl PoolState {
     pub fn lp(&self, key: &str) -> u128 {
         self.lp.get(key).copied().unwrap_or_default()
     }
-
-    pub fn total_share(&self) -> u128 {
-        crate::sqrt(self.k)
-    }
 }
 
 impl Storable for PoolState {
@@ -335,7 +331,7 @@ impl LiquidityPool {
             .entry(initiator)
             .and_modify(|v| *v += user_mint)
             .or_insert(user_mint);
-        state.k = state.rune_supply() * state.btc_supply() as u128;
+        state.k += user_mint;
         state.nonce += 1;
         state.id = Some(txid);
         Ok((state, pool_utxo))
@@ -451,11 +447,11 @@ impl LiquidityPool {
 
         let mut rune_delta = share
             .checked_mul(rune_supply)
-            .and_then(|m| m.checked_div(recent_state.total_share()))
+            .and_then(|m| m.checked_div(recent_state.k))
             .ok_or(ExchangeError::EmptyPool)?;
         let mut btc_delta = share
             .checked_mul(btc_supply as u128)
-            .and_then(|m| m.checked_div(recent_state.total_share()))
+            .and_then(|m| m.checked_div(recent_state.k))
             .ok_or(ExchangeError::EmptyPool)?;
 
         let btc_remains = recent_state
@@ -573,7 +569,7 @@ impl LiquidityPool {
             None
         };
         state.utxo = new_utxo;
-        state.k = state.rune_supply() * state.btc_supply() as u128;
+        state.k -= share;
         if state.utxo.is_none() {
             state.incomes = 0;
             state.lp.clear();
@@ -748,7 +744,6 @@ impl LiquidityPool {
         state.utxo = Some(pool_output);
         state.nonce += 1;
         state.incomes += burn;
-        // DON'T UPDATE K HERE
         state.id = Some(txid);
         Ok((state, prev_utxo))
     }
