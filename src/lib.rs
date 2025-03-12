@@ -1,4 +1,5 @@
 mod canister;
+mod migrate;
 mod pool;
 mod psbt;
 
@@ -13,8 +14,7 @@ use ic_stable_structures::{
 };
 use ree_types::{
     bitcoin::{key::TapTweak, secp256k1::Secp256k1, Address, Network},
-    exchange_interfaces::CoinBalance,
-    CoinId, Pubkey, Txid,
+    CoinBalance, CoinId, Pubkey, Utxo,
 };
 use serde::Serialize;
 use std::cell::RefCell;
@@ -23,6 +23,7 @@ use thiserror::Error;
 
 pub const MIN_RESERVED_SATOSHIS: u64 = 546;
 pub const RUNE_INDEXER_CANISTER: &'static str = "kzrva-ziaaa-aaaar-qamyq-cai";
+pub const TESTNET_RUNE_INDEXER_CANISTER: &'static str = "f2dwm-caaaa-aaaao-qjxlq-cai";
 pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9";
@@ -31,14 +32,6 @@ pub const DEFAULT_FEE_COLLECTOR: &'static str =
 pub struct Output {
     pub balance: CoinBalance,
     pub pubkey: Pubkey,
-}
-
-#[derive(Eq, CandidType, PartialEq, Clone, Debug, Deserialize, Serialize)]
-pub struct Utxo {
-    pub txid: Txid,
-    pub vout: u32,
-    pub balance: CoinBalance,
-    pub satoshis: u64,
 }
 
 #[derive(Debug, Error, CandidType)]
@@ -75,14 +68,23 @@ pub enum ExchangeError {
     InvalidPsbt(String),
     #[error("invalid pool state: {0}")]
     InvalidState(String),
+    #[error("invalid sign_psbt args: {0}")]
+    InvalidSignPsbtArgs(String),
+    #[error("pool state expired, current = {0}")]
+    PoolStateExpired(u64),
+    #[error("pool address not found")]
+    PoolAddressNotFound,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-const POOLS_MEMORY_ID: MemoryId = MemoryId::new(0);
+const POOLS_MEMORY_ID_V1: MemoryId = MemoryId::new(0);
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
 const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
+const POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
+// migrate from v1 to v2
+const POOLS_MEMORY_ID: MemoryId = MemoryId::new(5);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -90,11 +92,17 @@ thread_local! {
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
 
+    static POOLS_V1: RefCell<StableBTreeMap<Pubkey, migrate::LiquidityPoolV1, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V1))));
+
     static POOLS: RefCell<StableBTreeMap<Pubkey, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));
 
     static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, Pubkey, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_TOKENS_MEMORY_ID))));
+
+    static POOL_ADDR: RefCell<StableBTreeMap<String, Pubkey, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_ADDR_MEMORY_ID))));
 
     static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), Pubkey::from_str(DEFAULT_FEE_COLLECTOR).expect("invalid pubkey: fee collector"))
@@ -160,6 +168,10 @@ pub(crate) fn with_pool_name(id: &CoinId) -> Option<Pubkey> {
     POOL_TOKENS.with_borrow(|p| p.get(&id))
 }
 
+pub(crate) fn with_pool_addr(addr: &String) -> Option<Pubkey> {
+    POOL_ADDR.with_borrow(|p| p.get(addr))
+}
+
 pub(crate) fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
     let secp = Secp256k1::new();
     let (tweaked, _) = untweaked.to_x_only_public_key().tap_tweak(&secp, None);
@@ -199,28 +211,6 @@ pub(crate) async fn sign_prehash_with_schnorr(
     Ok(signature)
 }
 
-pub(crate) async fn sign_prehash_with_ecdsa(
-    digest: impl AsRef<[u8; 32]>,
-    key_name: impl ToString,
-    path: Vec<u8>,
-) -> Result<Vec<u8>, ExchangeError> {
-    use ic_cdk::api::management_canister::ecdsa::{
-        self, EcdsaCurve, EcdsaKeyId, SignWithEcdsaArgument, SignWithEcdsaResponse,
-    };
-    let args = SignWithEcdsaArgument {
-        message_hash: digest.as_ref().to_vec(),
-        derivation_path: vec![path],
-        key_id: EcdsaKeyId {
-            curve: EcdsaCurve::Secp256k1,
-            name: key_name.to_string(),
-        },
-    };
-    let (sig,): (SignWithEcdsaResponse,) = ecdsa::sign_with_ecdsa(args)
-        .await
-        .map_err(|(_, _)| ExchangeError::ChainKeyError)?;
-    Ok(sig.signature)
-}
-
 pub(crate) fn create_empty_pool(meta: CoinMeta, untweaked: Pubkey) -> Result<(), ExchangeError> {
     if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
@@ -229,18 +219,26 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, untweaked: Pubkey) -> Result<(),
     let pool =
         LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, DEFAULT_BURN_RATE, untweaked.clone())
             .expect("didn't set fee rate");
+    let addr = pool.addr.clone();
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, untweaked.clone());
         POOLS.with_borrow_mut(|p| {
-            p.insert(untweaked, pool);
+            p.insert(untweaked.clone(), pool);
         });
+        POOL_ADDR.with_borrow_mut(|p| p.insert(addr, untweaked));
     });
     Ok(())
 }
 
 pub(crate) fn p2tr_untweaked(pubkey: &Pubkey) -> String {
     let untweaked = pubkey.to_x_only_public_key();
-    let address = Address::p2tr(&Secp256k1::new(), untweaked, None, Network::Bitcoin);
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let address = Address::p2tr(&Secp256k1::new(), untweaked, None, Network::Testnet4);
+        } else {
+            let address = Address::p2tr(&Secp256k1::new(), untweaked, None, Network::Bitcoin);
+        }
+    }
     address.to_string()
 }
 

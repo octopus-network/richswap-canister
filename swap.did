@@ -1,13 +1,11 @@
-type AssetWithOwner = record {
-  coin_balance : CoinBalance;
-  owner_address : text;
-};
 type CoinBalance = record { id : text; value : nat };
-type CoinMeta = record { id : text; min_amount : nat; symbol : text };
 type ExchangeError = variant {
+  InvalidSignPsbtArgs : text;
   InvalidNumeric;
   Overflow;
   InvalidInput;
+  PoolAddressNotFound;
+  PoolStateExpired : nat64;
   TooSmallFunds;
   InvalidRuneId;
   InvalidPool;
@@ -27,12 +25,23 @@ type ExtractFeeOffer = record {
   nonce : nat64;
   input : Utxo;
 };
-type FinalizeTxArgs = record { tx_id : text; pool_key : text };
-type InputRune = record {
-  tx_id : text;
-  coin_balance : opt CoinBalance;
-  vout : nat32;
-  btc_amount : nat64;
+type FinalizeTxArgs = record { txid : text; pool_key : text };
+type GetPoolInfoArgs = record { pool_address : text };
+type GetPoolListArgs = record { from : opt text; limit : nat32 };
+type InputCoin = record { coin : CoinBalance; from : text };
+type Intention = record {
+  input_coins : vec InputCoin;
+  output_coins : vec OutputCoin;
+  action : text;
+  exchange_id : text;
+  pool_utxo_spend : vec text;
+  nonce : nat64;
+  pool_utxo_receive : vec text;
+  pool_address : text;
+};
+type IntentionSet = record {
+  initiator_address : text;
+  intentions : vec Intention;
 };
 type Liquidity = record { user_share : nat; sqrt_k : nat; btc_supply : nat64 };
 type LiquidityOffer = record {
@@ -40,54 +49,24 @@ type LiquidityOffer = record {
   inputs : opt Utxo;
   nonce : nat64;
 };
-type LiquidityPoolWithState = record {
-  addr : text;
-  meta : CoinMeta;
-  pubkey : text;
-  state : opt PoolState;
-  fee_rate : nat64;
-  tweaked : text;
-};
-type OutputRune = record { coin_balance : opt CoinBalance; btc_amount : nat64 };
+type OutputCoin = record { to : text; coin : CoinBalance };
 type PoolInfo = record {
-  id : text;
+  key : text;
   name : text;
-  coins : vec text;
-  utxo : opt Utxo;
-  btc_supply : nat64;
+  btc_reserved : nat64;
+  coin_reserved : vec CoinBalance;
   attributes : text;
   address : text;
   nonce : nat64;
-};
-type PoolMeta = record {
-  id : text;
-  name : text;
-  coins : vec text;
-  address : text;
+  utxos : vec Utxo;
 };
 type PoolOverview = record {
-  id : text;
+  key : text;
   name : text;
-  coins : vec text;
-  btc_supply : nat64;
+  btc_reserved : nat64;
+  coin_reserved : vec CoinBalance;
   address : text;
   nonce : nat64;
-};
-type PoolState = record {
-  k : nat;
-  id : opt text;
-  lp : vec record { text; nat };
-  utxo : opt Utxo;
-  incomes : nat64;
-  nonce : nat64;
-};
-type ReeInstruction = record {
-  input_coins : vec AssetWithOwner;
-  method : text;
-  output_coins : vec AssetWithOwner;
-  exchange_id : text;
-  nonce : opt nat64;
-  pool_key : opt text;
 };
 type Result = variant { Ok : text; Err : ExchangeError };
 type Result_1 = variant { Ok : Liquidity; Err : ExchangeError };
@@ -97,18 +76,16 @@ type Result_4 = variant { Ok : SwapOffer; Err : ExchangeError };
 type Result_5 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
 type Result_6 = variant { Ok : text; Err : text };
 type SignPsbtArgs = record {
-  tx_id : text;
   zero_confirmed_tx_count_in_queue : nat32;
-  instruction_index : nat32;
-  input_runes : vec InputRune;
-  output_runes : vec OutputRune;
-  all_instructions : vec ReeInstruction;
+  txid : text;
+  intention_set : IntentionSet;
+  intention_index : nat32;
   psbt_hex : text;
 };
 type SwapOffer = record { output : CoinBalance; nonce : nat64; input : Utxo };
 type Utxo = record {
-  satoshis : nat64;
-  balance : CoinBalance;
+  maybe_rune : opt CoinBalance;
+  sats : nat64;
   txid : text;
   vout : nat32;
 };
@@ -120,17 +97,15 @@ type WithdrawalOffer = record {
 service : {
   create : (text) -> (Result);
   finalize_tx : (FinalizeTxArgs) -> ();
-  find_pool : (text) -> (opt LiquidityPoolWithState) query;
   get_fee_collector : () -> (text) query;
   get_lp : (text, text) -> (Result_1) query;
   get_min_tx_value : () -> (nat64) query;
-  get_pool_info : (text) -> (opt PoolInfo) query;
-  get_pool_list : (opt text, nat32) -> (vec PoolOverview) query;
-  list_pools : (opt text, nat32) -> (vec PoolMeta) query;
+  get_pool_info : (GetPoolInfoArgs) -> (opt PoolInfo) query;
+  get_pool_list : (GetPoolListArgs) -> (vec PoolOverview) query;
   pre_add_liquidity : (text, CoinBalance) -> (Result_2) query;
   pre_extract_fee : (text) -> (Result_3) query;
   pre_swap : (text, CoinBalance) -> (Result_4) query;
-  pre_withdraw_liquidity : (text, text, CoinBalance) -> (Result_5) query;
+  pre_withdraw_liquidity : (text, text, nat) -> (Result_5) query;
   rollback_tx : (FinalizeTxArgs) -> ();
   set_fee_collector : (text) -> ();
   set_orchestrator : (principal) -> ();
