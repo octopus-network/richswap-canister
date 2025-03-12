@@ -262,26 +262,3 @@ pub(crate) fn set_orchestrator(principal: Principal) {
 pub(crate) fn sqrt(x: u128) -> u128 {
     x.isqrt()
 }
-
-pub(crate) fn migrate_to_v2() {
-    let is_empty = POOLS.with_borrow(|p| p.is_empty());
-    if !is_empty {
-        return;
-    }
-    POOLS_V1.with(|p| {
-        let pools = p.borrow().iter().map(|p| p.1.clone()).collect::<Vec<_>>();
-        for pool in pools {
-            let pool: LiquidityPool = pool.into();
-            let id = pool.meta.id;
-            let addr = pool.addr.clone();
-            let untweaked = pool.tweaked.clone();
-            POOL_TOKENS.with_borrow_mut(|l| {
-                l.insert(id, untweaked.clone());
-                POOLS.with_borrow_mut(|p| {
-                    p.insert(untweaked.clone(), pool);
-                });
-                POOL_ADDR.with_borrow_mut(|p| p.insert(addr, untweaked));
-            });
-        }
-    });
-}

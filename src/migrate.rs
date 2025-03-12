@@ -130,3 +130,27 @@ impl Storable for LiquidityPoolV1 {
         dire
     }
 }
+
+#[allow(unused)]
+pub(crate) fn migrate_to_v2() {
+    let is_empty = crate::POOLS.with_borrow(|p| p.is_empty());
+    if !is_empty {
+        return;
+    }
+    crate::POOLS_V1.with(|p| {
+        let pools = p.borrow().iter().map(|p| p.1.clone()).collect::<Vec<_>>();
+        for pool in pools {
+            let pool: crate::pool::LiquidityPool = pool.into();
+            let id = pool.meta.id;
+            let addr = pool.addr.clone();
+            let untweaked = pool.pubkey.clone();
+            crate::POOL_TOKENS.with_borrow_mut(|l| {
+                l.insert(id, untweaked.clone());
+                crate::POOLS.with_borrow_mut(|p| {
+                    p.insert(untweaked.clone(), pool);
+                });
+                crate::POOL_ADDR.with_borrow_mut(|p| p.insert(addr, untweaked));
+            });
+        }
+    });
+}

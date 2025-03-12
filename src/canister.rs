@@ -4,7 +4,6 @@ use crate::{
 };
 use candid::{CandidType, Deserialize, Principal};
 use ic_canister_log::log;
-use ic_cdk::post_upgrade;
 use ic_cdk_macros::{query, update};
 use ic_log::*;
 use ree_types::{
@@ -13,11 +12,6 @@ use ree_types::{
 use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
 use std::str::FromStr;
-
-#[post_upgrade]
-pub fn migrate() {
-    crate::migrate_to_v2();
-}
 
 #[update(guard = "ensure_owner")]
 pub fn set_fee_collector(pubkey: Pubkey) {
