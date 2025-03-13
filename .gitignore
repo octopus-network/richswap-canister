@@ -25,6 +25,5 @@ dist/
 .dfx/
 
 # docs
-*.pdf
 *.tex
 *.tmp
