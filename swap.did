@@ -35,6 +35,7 @@ type Intention = record {
   action : text;
   exchange_id : text;
   pool_utxo_spend : vec text;
+  action_params : text;
   nonce : nat64;
   pool_utxo_receive : vec text;
   pool_address : text;
@@ -100,6 +101,7 @@ service : {
   get_fee_collector : () -> (text) query;
   get_lp : (text, text) -> (Result_1) query;
   get_min_tx_value : () -> (nat64) query;
+  get_minimal_tx_value : (nat8) -> (nat64) query;
   get_pool_info : (GetPoolInfoArgs) -> (opt PoolInfo) query;
   get_pool_list : (GetPoolListArgs) -> (vec PoolOverview) query;
   pre_add_liquidity : (text, CoinBalance) -> (Result_2) query;

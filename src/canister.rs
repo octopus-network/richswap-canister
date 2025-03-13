@@ -34,6 +34,11 @@ pub fn get_min_tx_value() -> u64 {
 }
 
 #[query]
+fn get_minimal_tx_value(_args: u8) -> u64 {
+    return pool::MIN_BTC_VALUE;
+}
+
+#[query]
 pub fn get_pool_list(args: GetPoolListArgs) -> Vec<PoolOverview> {
     let GetPoolListArgs { from, limit } = args;
     let mut pools = crate::get_pools();
