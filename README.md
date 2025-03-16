@@ -18,16 +18,20 @@ Here’s how the process works:
 
 **Constructing the PSBT**: The client application (e.g., a wallet or interface) gathers the necessary information from RichSwap and constructs a PSBT based on the user’s input. The user then signs the PSBT to authorize the transaction.
 
-**Submitting the PSBT**: The signed PSBT is submitted to RichSwap for validation.
+**Submitting the PSBT to REE**: The client composes the signed PSBT and essential information retrieved in the previous step and submit to REE Orchestrator. REE will validate the PSBT(including the UTXOs and their RUNE information) and analysis the input-output relations. If all check pass, Orchestrator will forward the request to RichSwap.
 
-**RichSwap’s Validation and Signing**: RichSwap verifies the transaction details and, if everything is valid, signs the pool’s UTXO using the ICP Chain Key. This step transforms the PSBT into a fully valid Bitcoin transaction.
+**RichSwap’s Validation and Signing**: RichSwap verifies the transaction details from REE Orchestrator and, if everything is valid, signs the pool’s UTXO using the ICP Chain Key. This step transforms the PSBT into a fully valid Bitcoin transaction.
 
-**Broadcasting the Transaction**: The finalized transaction is handed over to the REE, which broadcasts it to the Bitcoin network for execution.
+**Broadcasting the Transaction**: The finalized transaction is returned to the REE, which broadcasts it to the Bitcoin network for execution.
 
 There is no need for cross-chain transfers or bridging, ensuring a seamless and secure experience while leveraging the unique capabilities of ICP and REE. This design not only simplifies the user experience but also enhances the security and efficiency of decentralized trading on Bitcoin.
 
-## License
-[MIT](LICENSE)
+## REE Tutorials
+
+Coming soon.
 
 ## Audit Report
 [blocksec](./audit_report/blocksec_omnity_richswap_v1.0-signed.pdf)
+
+## License
+[MIT](LICENSE)

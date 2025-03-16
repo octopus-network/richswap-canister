@@ -28,83 +28,6 @@ pub fn get_fee_collector() -> Pubkey {
     crate::get_fee_collector()
 }
 
-#[query]
-pub fn get_min_tx_value() -> u64 {
-    pool::MIN_BTC_VALUE
-}
-
-#[query]
-fn get_minimal_tx_value(_args: u8) -> u64 {
-    return pool::MIN_BTC_VALUE;
-}
-
-#[query]
-pub fn get_pool_list(args: GetPoolListArgs) -> Vec<PoolOverview> {
-    let GetPoolListArgs { from, limit } = args;
-    let mut pools = crate::get_pools();
-    pools.sort_by(|p0, p1| {
-        let r0 = p0.states.last().map(|s| s.btc_supply()).unwrap_or_default();
-        let r1 = p1.states.last().map(|s| s.btc_supply()).unwrap_or_default();
-        r1.cmp(&r0)
-    });
-    pools
-        .iter()
-        .skip_while(|p| from.as_ref().map_or(false, |from| p.pubkey != *from))
-        .take(limit as usize + from.as_ref().map_or(0, |_| 1))
-        .skip(from.as_ref().map_or(0, |_| 1))
-        .map(|p| PoolOverview {
-            key: p.pubkey.clone(),
-            name: p.meta.symbol.clone(),
-            address: p.addr.clone(),
-            nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
-            btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
-            coin_reserved: p
-                .states
-                .last()
-                .map(|s| {
-                    vec![CoinBalance {
-                        id: p.meta.id,
-                        value: s.rune_supply() as u128,
-                    }]
-                })
-                .unwrap_or(vec![CoinBalance {
-                    id: p.meta.id,
-                    value: 0,
-                }]),
-        })
-        .collect()
-}
-
-#[query]
-pub fn get_pool_info(args: GetPoolInfoArgs) -> Option<PoolInfo> {
-    let GetPoolInfoArgs { pool_address } = args;
-    let pool_key = crate::with_pool_addr(&pool_address)?;
-    crate::find_pool(&pool_key).map(|p| PoolInfo {
-        key: p.pubkey.clone(),
-        name: p.meta.symbol.clone(),
-        address: p.addr.clone(),
-        nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
-        btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
-        coin_reserved: p
-            .states
-            .last()
-            .map(|s| {
-                vec![CoinBalance {
-                    id: p.meta.id,
-                    value: s.rune_supply() as u128,
-                }]
-            })
-            .unwrap_or_default(),
-        utxos: p
-            .states
-            .last()
-            .and_then(|s| s.utxo.clone())
-            .map(|utxo| vec![utxo])
-            .unwrap_or_default(),
-        attributes: p.attrs(),
-    })
-}
-
 #[update]
 pub async fn create(rune_id: CoinId) -> Result<Pubkey, ExchangeError> {
     match crate::with_pool_name(&rune_id) {
@@ -267,36 +190,118 @@ pub fn pre_swap(id: Pubkey, input: CoinBalance) -> Result<SwapOffer, ExchangeErr
     })
 }
 
+/// REE API
+#[query]
+fn get_minimal_tx_value(_args: GetMinimalTxValueArgs) -> GetMinimalTxValueResponse {
+    pool::MIN_BTC_VALUE
+}
+
+/// REE API
+#[query]
+pub fn get_pool_list(args: GetPoolListArgs) -> GetPoolListResponse {
+    let GetPoolListArgs { from, limit } = args;
+    let mut pools = crate::get_pools();
+    pools.sort_by(|p0, p1| {
+        let r0 = p0.states.last().map(|s| s.btc_supply()).unwrap_or_default();
+        let r1 = p1.states.last().map(|s| s.btc_supply()).unwrap_or_default();
+        r1.cmp(&r0)
+    });
+    pools
+        .iter()
+        .skip_while(|p| from.as_ref().map_or(false, |from| p.pubkey != *from))
+        .take(limit as usize + from.as_ref().map_or(0, |_| 1))
+        .skip(from.as_ref().map_or(0, |_| 1))
+        .map(|p| PoolOverview {
+            key: p.pubkey.clone(),
+            name: p.meta.symbol.clone(),
+            address: p.addr.clone(),
+            nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
+            btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
+            coin_reserved: p
+                .states
+                .last()
+                .map(|s| {
+                    vec![CoinBalance {
+                        id: p.meta.id,
+                        value: s.rune_supply() as u128,
+                    }]
+                })
+                .unwrap_or(vec![CoinBalance {
+                    id: p.meta.id,
+                    value: 0,
+                }]),
+        })
+        .collect()
+}
+
+/// REE API
+#[query]
+pub fn get_pool_info(args: GetPoolInfoArgs) -> GetPoolInfoResponse {
+    let GetPoolInfoArgs { pool_address } = args;
+    let pool_key = crate::with_pool_addr(&pool_address)?;
+    crate::find_pool(&pool_key).map(|p| PoolInfo {
+        key: p.pubkey.clone(),
+        name: p.meta.symbol.clone(),
+        address: p.addr.clone(),
+        nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
+        btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
+        coin_reserved: p
+            .states
+            .last()
+            .map(|s| {
+                vec![CoinBalance {
+                    id: p.meta.id,
+                    value: s.rune_supply() as u128,
+                }]
+            })
+            .unwrap_or_default(),
+        utxos: p
+            .states
+            .last()
+            .and_then(|s| s.utxo.clone())
+            .map(|utxo| vec![utxo])
+            .unwrap_or_default(),
+        attributes: p.attrs(),
+    })
+}
+
+/// REE API
 #[update(guard = "ensure_orchestrator")]
-pub fn rollback_tx(args: RollbackTxArgs) {
+pub fn rollback_tx(args: RollbackTxArgs) -> RollbackTxResponse {
     if let Err(e) = crate::with_pool_mut(&args.pool_key, |p| {
         let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
         pool.rollback(args.txid)?;
         Ok(Some(pool))
     }) {
         log!(ERROR, "Rollback tx {}: {}", e, args.txid);
+        return Err(e.to_string());
     }
+    return Ok(());
 }
 
+/// REE API
 #[update(guard = "ensure_orchestrator")]
-pub fn finalize_tx(args: FinalizeTxArgs) {
+pub fn finalize_tx(args: FinalizeTxArgs) -> FinalizeTxResponse {
     if let Err(e) = crate::with_pool_mut(&args.pool_key, |p| {
         let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
         pool.finalize(args.txid)?;
         Ok(Some(pool))
     }) {
         log!(ERROR, "Finalizing tx {}: {}", e, args.txid);
+        return Err(e.to_string());
     }
+    return Ok(());
 }
 
+/// REE API
 #[update(guard = "ensure_orchestrator")]
-pub async fn sign_psbt(args: SignPsbtArgs) -> Result<String, String> {
-    let SignPsbtArgs {
+pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
+    let ExecuteTxArgs {
         psbt_hex,
         txid,
         intention_set,
         intention_index,
-        zero_confirmed_tx_count_in_queue: _zero_confirmed_tx_count_in_queue,
+        zero_confirmed_tx_queue_length: _zero_confirmed_tx_queue_length,
     } = args;
     let raw = hex::decode(&psbt_hex).map_err(|_| "invalid psbt".to_string())?;
     let mut psbt = Psbt::deserialize(raw.as_slice()).map_err(|_| "invalid psbt".to_string())?;
