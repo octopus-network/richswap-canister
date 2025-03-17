@@ -211,9 +211,10 @@ pub fn get_pool_list(args: GetPoolListArgs) -> GetPoolListResponse {
         .skip_while(|p| from.as_ref().map_or(false, |from| p.pubkey != *from))
         .take(limit as usize + from.as_ref().map_or(0, |_| 1))
         .skip(from.as_ref().map_or(0, |_| 1))
-        .map(|p| PoolOverview {
+        .map(|p| PoolInfo {
             key: p.pubkey.clone(),
             name: p.meta.symbol.clone(),
+            key_derivation_path: vec![p.meta.id.to_bytes()],
             address: p.addr.clone(),
             nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
             btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
@@ -230,6 +231,13 @@ pub fn get_pool_list(args: GetPoolListArgs) -> GetPoolListResponse {
                     id: p.meta.id,
                     value: 0,
                 }]),
+            utxos: p
+                .states
+                .last()
+                .and_then(|s| s.utxo.clone())
+                .map(|utxo| vec![utxo])
+                .unwrap_or_default(),
+            attributes: p.attrs(),
         })
         .collect()
 }
@@ -242,6 +250,7 @@ pub fn get_pool_info(args: GetPoolInfoArgs) -> GetPoolInfoResponse {
     crate::find_pool(&pool_key).map(|p| PoolInfo {
         key: p.pubkey.clone(),
         name: p.meta.symbol.clone(),
+        key_derivation_path: vec![p.meta.id.to_bytes()],
         address: p.addr.clone(),
         nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
         btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),

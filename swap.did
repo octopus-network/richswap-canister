@@ -66,19 +66,12 @@ type PoolInfo = record {
   key : text;
   name : text;
   btc_reserved : nat64;
+  key_derivation_path : vec blob;
   coin_reserved : vec CoinBalance;
   attributes : text;
   address : text;
   nonce : nat64;
   utxos : vec Utxo;
-};
-type PoolOverview = record {
-  key : text;
-  name : text;
-  btc_reserved : nat64;
-  coin_reserved : vec CoinBalance;
-  address : text;
-  nonce : nat64;
 };
 type Result = variant { Ok : text; Err : ExchangeError };
 type Result_1 = variant { Ok : text; Err : text };
@@ -108,7 +101,7 @@ service : {
   get_lp : (text, text) -> (Result_3) query;
   get_minimal_tx_value : (GetMinimalTxValueArgs) -> (nat64) query;
   get_pool_info : (GetPoolInfoArgs) -> (opt PoolInfo) query;
-  get_pool_list : (GetPoolListArgs) -> (vec PoolOverview) query;
+  get_pool_list : (GetPoolListArgs) -> (vec PoolInfo) query;
   pre_add_liquidity : (text, CoinBalance) -> (Result_4) query;
   pre_extract_fee : (text) -> (Result_5) query;
   pre_swap : (text, CoinBalance) -> (Result_6) query;
