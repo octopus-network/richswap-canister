@@ -78,13 +78,15 @@ pub enum ExchangeError {
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-const POOLS_MEMORY_ID_V1: MemoryId = MemoryId::new(0);
+// const POOLS_MEMORY_ID_V1: MemoryId = MemoryId::new(0);
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
 const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
 const POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
 // migrate from v1 to v2
-const POOLS_MEMORY_ID: MemoryId = MemoryId::new(5);
+const POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
+// migrate from v2 to v3
+const POOLS_MEMORY_ID: MemoryId = MemoryId::new(6);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -92,8 +94,8 @@ thread_local! {
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
 
-    static POOLS_V1: RefCell<StableBTreeMap<Pubkey, migrate::LiquidityPoolV1, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V1))));
+    static POOLS_V2: RefCell<StableBTreeMap<Pubkey, migrate::LiquidityPoolV2, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
 
     static POOLS: RefCell<StableBTreeMap<Pubkey, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));

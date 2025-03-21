@@ -63,7 +63,7 @@ pub struct PoolState {
     pub utxo: Option<Utxo>,
     pub incomes: u64,
     pub k: u128,
-    pub lp: BTreeMap<String, u128>,
+    pub lp: BTreeMap<String, Share>,
 }
 
 impl PoolState {
@@ -86,8 +86,18 @@ impl PoolState {
     }
 
     pub fn lp(&self, key: &str) -> u128 {
+        self.lp.get(key).map(|s| s.share).unwrap_or_default()
+    }
+
+    pub fn share(&self, key: &str) -> Share {
         self.lp.get(key).copied().unwrap_or_default()
     }
+}
+
+#[derive(CandidType, Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
+pub struct Share {
+    pub share: u128,
+    pub incomes: u64,
 }
 
 impl Storable for PoolState {
@@ -329,8 +339,11 @@ impl LiquidityPool {
         state
             .lp
             .entry(initiator)
-            .and_modify(|v| *v += user_mint)
-            .or_insert(user_mint);
+            .and_modify(|v| v.share += user_mint)
+            .or_insert(Share {
+                share: user_mint,
+                incomes: 0,
+            });
         state.k += user_mint;
         state.nonce += 1;
         state.id = Some(txid);
@@ -575,7 +588,13 @@ impl LiquidityPool {
             state.lp.clear();
         } else {
             if new_share != 0 {
-                state.lp.insert(initiator, new_share);
+                state.lp.insert(
+                    initiator,
+                    Share {
+                        share: new_share,
+                        incomes: 0,
+                    },
+                );
             } else {
                 state.lp.remove(&initiator);
             }
@@ -690,7 +709,7 @@ impl LiquidityPool {
             ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
         )?;
         // check minimal sats
-        let (offer, _, burn) = self.available_to_swap(input.coin)?;
+        let (offer, fee, burn) = self.available_to_swap(input.coin)?;
         let (btc_output, rune_output) = if input.coin.id == CoinId::btc() {
             let input_btc: u64 = input
                 .coin
@@ -742,6 +761,14 @@ impl LiquidityPool {
         )
         .map_err(|_| ExchangeError::InvalidTxid)?;
         state.utxo = Some(pool_output);
+        for (_, v) in state.lp.iter_mut() {
+            if let Some(incr) = (fee as u128)
+                .checked_mul(v.share)
+                .and_then(|mul| mul.checked_div(state.k))
+            {
+                v.incomes += incr as u64;
+            }
+        }
         state.nonce += 1;
         state.incomes += burn;
         state.id = Some(txid);

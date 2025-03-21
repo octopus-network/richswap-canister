@@ -4,6 +4,7 @@ use crate::{
 };
 use candid::{CandidType, Deserialize, Principal};
 use ic_canister_log::log;
+use ic_cdk::post_upgrade;
 use ic_cdk_macros::{query, update};
 use ic_log::*;
 use ree_types::{
@@ -12,6 +13,11 @@ use ree_types::{
 use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
 use std::str::FromStr;
+
+#[post_upgrade]
+pub fn migrate() {
+    crate::migrate::migrate_to_v3();
+}
 
 #[update(guard = "ensure_owner")]
 pub fn set_fee_collector(pubkey: Pubkey) {
@@ -92,9 +98,9 @@ pub fn pre_extract_fee(pool_key: Pubkey) -> Result<ExtractFeeOffer, ExchangeErro
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Liquidity {
-    pub btc_supply: u64,
+    pub user_incomes: u64,
     pub user_share: u128,
-    pub sqrt_k: u128,
+    pub total_share: u128,
 }
 
 #[query]
@@ -105,9 +111,9 @@ pub fn get_lp(pool_key: Pubkey, user_addr: String) -> Result<Liquidity, Exchange
             .last()
             .and_then(|s| {
                 Some(Liquidity {
-                    btc_supply: s.btc_supply(),
-                    user_share: s.lp(&user_addr),
-                    sqrt_k: s.k,
+                    user_share: s.share(&user_addr).share,
+                    user_incomes: s.share(&user_addr).incomes,
+                    total_share: s.k,
                 })
             })
             .ok_or(ExchangeError::EmptyPool)
