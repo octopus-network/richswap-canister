@@ -92,9 +92,9 @@ pub fn pre_extract_fee(pool_key: Pubkey) -> Result<ExtractFeeOffer, ExchangeErro
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Liquidity {
-    pub btc_supply: u64,
+    pub user_incomes: u64,
     pub user_share: u128,
-    pub sqrt_k: u128,
+    pub total_share: u128,
 }
 
 #[query]
@@ -105,9 +105,9 @@ pub fn get_lp(pool_key: Pubkey, user_addr: String) -> Result<Liquidity, Exchange
             .last()
             .and_then(|s| {
                 Some(Liquidity {
-                    btc_supply: s.btc_supply(),
                     user_share: s.lp(&user_addr),
-                    sqrt_k: s.k,
+                    user_incomes: s.earning(&user_addr),
+                    total_share: s.k,
                 })
             })
             .ok_or(ExchangeError::EmptyPool)

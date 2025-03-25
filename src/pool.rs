@@ -64,6 +64,8 @@ pub struct PoolState {
     pub incomes: u64,
     pub k: u128,
     pub lp: BTreeMap<String, u128>,
+    #[serde(default)]
+    pub lp_earnings: BTreeMap<String, u64>,
 }
 
 impl PoolState {
@@ -87,6 +89,10 @@ impl PoolState {
 
     pub fn lp(&self, key: &str) -> u128 {
         self.lp.get(key).copied().unwrap_or_default()
+    }
+
+    pub fn earning(&self, key: &str) -> u64 {
+        self.lp_earnings.get(key).copied().unwrap_or_default()
     }
 }
 
@@ -578,6 +584,7 @@ impl LiquidityPool {
                 state.lp.insert(initiator, new_share);
             } else {
                 state.lp.remove(&initiator);
+                state.lp_earnings.remove(&initiator);
             }
         }
         state.nonce += 1;
@@ -690,7 +697,7 @@ impl LiquidityPool {
             ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
         )?;
         // check minimal sats
-        let (offer, _, burn) = self.available_to_swap(input.coin)?;
+        let (offer, fee, burn) = self.available_to_swap(input.coin)?;
         let (btc_output, rune_output) = if input.coin.id == CoinId::btc() {
             let input_btc: u64 = input
                 .coin
@@ -742,6 +749,18 @@ impl LiquidityPool {
         )
         .map_err(|_| ExchangeError::InvalidTxid)?;
         state.utxo = Some(pool_output);
+        for (k, v) in state.lp.iter() {
+            if let Some(incr) = (fee as u128)
+                .checked_mul(*v)
+                .and_then(|mul| mul.checked_div(state.k))
+            {
+                state
+                    .lp_earnings
+                    .entry(k.clone())
+                    .and_modify(|e| *e += incr as u64)
+                    .or_insert(incr as u64);
+            }
+        }
         state.nonce += 1;
         state.incomes += burn;
         state.id = Some(txid);
@@ -779,4 +798,91 @@ impl LiquidityPool {
     pub(crate) fn commit(&mut self, state: PoolState) {
         self.states.push(state);
     }
+}
+
+#[test]
+pub fn test_migrate() {
+    use std::str::FromStr;
+
+    #[derive(CandidType, Clone, Debug, Deserialize, Serialize)]
+    pub struct LiquidityPoolV1 {
+        pub states: Vec<PoolStateV1>,
+        pub fee_rate: u64,
+        pub burn_rate: u64,
+        pub meta: CoinMeta,
+        pub pubkey: Pubkey,
+        pub tweaked: Pubkey,
+        pub addr: String,
+    }
+
+    #[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
+    pub struct PoolStateV1 {
+        pub id: Option<Txid>,
+        pub nonce: u64,
+        pub utxo: Option<Utxo>,
+        pub incomes: u64,
+        pub k: u128,
+        pub lp: BTreeMap<String, u128>,
+    }
+
+    impl Storable for PoolStateV1 {
+        const BOUND: Bound = Bound::Unbounded;
+
+        fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+            let mut bytes = vec![];
+            let _ = ciborium::ser::into_writer(self, &mut bytes);
+            std::borrow::Cow::Owned(bytes)
+        }
+
+        fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+            let dire = ciborium::de::from_reader(bytes.as_ref()).expect("failed to decode Pool");
+            dire
+        }
+    }
+
+    impl Storable for LiquidityPoolV1 {
+        const BOUND: Bound = Bound::Unbounded;
+
+        fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+            let mut bytes = vec![];
+            let _ = ciborium::ser::into_writer(self, &mut bytes);
+            std::borrow::Cow::Owned(bytes)
+        }
+
+        fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+            let dire = ciborium::de::from_reader(bytes.as_ref()).expect("failed to decode Pool");
+            dire
+        }
+    }
+
+    let mut lp = BTreeMap::new();
+    lp.insert(
+        "tb1pfr420a6qr8t00xwjyfz7x4lg2ppdqnnm3n7gk8x4q4qra93wx88qpam69j".to_string(),
+        1241451,
+    );
+    let pool = LiquidityPoolV1 {
+        states: vec![PoolStateV1 {
+            id: None,
+            nonce: 1u64,
+            utxo: None,
+            incomes: 200,
+            k: 1231241099123u128,
+            lp,
+        }],
+        fee_rate: 7000,
+        burn_rate: 2000,
+        meta: CoinMeta::btc(),
+        pubkey: Pubkey::from_str(
+            "74503101f591da4f1008b057b79aff41c65f855e0e635a601c689041492b393a",
+        )
+        .unwrap(),
+        tweaked: Pubkey::from_str(
+            "74503101f591da4f1008b057b79aff41c65f855e0e635a601c689041492b393a",
+        )
+        .unwrap(),
+        addr: "tb1puzk3gn4z3rrjjnrhlgk5yvts8ejs0j2umazpcc4anq62wfk00e6ssw9p0n".to_string(),
+    };
+    let serialized = pool.to_bytes();
+    let pool = LiquidityPool::from_bytes(serialized);
+    assert!(pool.states[0].lp_earnings.is_empty());
 }

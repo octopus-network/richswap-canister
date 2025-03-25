@@ -1,5 +1,4 @@
 mod canister;
-mod migrate;
 mod pool;
 mod psbt;
 
@@ -78,7 +77,7 @@ pub enum ExchangeError {
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-const POOLS_MEMORY_ID_V1: MemoryId = MemoryId::new(0);
+// const POOLS_MEMORY_ID_V1: MemoryId = MemoryId::new(0);
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
 const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
@@ -91,9 +90,6 @@ thread_local! {
 
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
-
-    static POOLS_V1: RefCell<StableBTreeMap<Pubkey, migrate::LiquidityPoolV1, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V1))));
 
     static POOLS: RefCell<StableBTreeMap<Pubkey, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));

@@ -561,23 +561,6 @@ dependencies = [
 
 [[package]]
 name = "ree-types"
-version = "0.1.0"
-source = "git+https://github.com/octopus-network/ree-types.git?rev=7342301b63914fa3391c663aee937ed133118805#7342301b63914fa3391c663aee937ed133118805"
-dependencies = [
- "anyhow",
- "bitcoin",
- "candid",
- "ciborium",
- "generic-array",
- "hex",
- "ic-cdk",
- "ic-stable-structures",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "ree-types"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cae87b56c5968a8e7e23cf09c603c5e8a5025da52d30ca90d85260c37b0d6b18"
@@ -612,8 +595,7 @@ dependencies = [
  "ic-log",
  "ic-stable-structures",
  "lazy_static",
- "ree-types 0.1.0",
- "ree-types 0.3.0",
+ "ree-types",
  "rune-indexer",
  "serde",
  "serde_json",
