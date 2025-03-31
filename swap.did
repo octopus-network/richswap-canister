@@ -55,7 +55,11 @@ type IntentionSet = record {
   initiator_address : text;
   intentions : vec Intention;
 };
-type Liquidity = record { user_share : nat; sqrt_k : nat; btc_supply : nat64 };
+type Liquidity = record {
+  total_share : nat;
+  user_share : nat;
+  user_incomes : nat64;
+};
 type LiquidityOffer = record {
   output : CoinBalance;
   inputs : opt Utxo;
