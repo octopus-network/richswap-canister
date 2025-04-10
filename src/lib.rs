@@ -1,6 +1,8 @@
 mod canister;
+mod migrate;
 mod pool;
 mod psbt;
+mod reorg;
 
 use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_BURN_RATE, DEFAULT_FEE_RATE};
 use candid::{CandidType, Deserialize, Principal};
@@ -13,7 +15,8 @@ use ic_stable_structures::{
 };
 use ree_types::{
     bitcoin::{key::TapTweak, secp256k1::Secp256k1, Address, Network},
-    CoinBalance, CoinId, Pubkey, Utxo,
+    exchange_interfaces::*,
+    CoinBalance, CoinId, Pubkey, TxRecord, Txid, Utxo,
 };
 use serde::Serialize;
 use std::cell::RefCell;
@@ -77,13 +80,20 @@ pub enum ExchangeError {
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-// const POOLS_MEMORY_ID_V1: MemoryId = MemoryId::new(0);
-const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(1);
+const _POOL_TOKENS_MEMORY_ID_V2: MemoryId = MemoryId::new(1);
 const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
-const POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
+// deprecated
+const _POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
 // migrate from v1 to v2
-const POOLS_MEMORY_ID: MemoryId = MemoryId::new(5);
+const POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
+// the v3 is addr -> pool
+const POOLS_MEMORY_ID: MemoryId = MemoryId::new(6);
+// the v3 is token -> addr
+const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(7);
+
+const BLOCKS_ID: MemoryId = MemoryId::new(8);
+const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -91,14 +101,20 @@ thread_local! {
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
 
-    static POOLS: RefCell<StableBTreeMap<Pubkey, LiquidityPool, Memory>> =
+    static POOLS_V2: RefCell<StableBTreeMap<Pubkey, LiquidityPool, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
+
+    static POOLS: RefCell<StableBTreeMap<String, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));
 
-    static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, Pubkey, Memory>> =
+    static _POOL_TOKENS_V2: RefCell<StableBTreeMap<CoinId, Pubkey, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(_POOL_TOKENS_MEMORY_ID_V2))));
+
+    static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, String, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_TOKENS_MEMORY_ID))));
 
-    static POOL_ADDR: RefCell<StableBTreeMap<String, Pubkey, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_ADDR_MEMORY_ID))));
+    static _POOL_ADDR_DEPRECATED: RefCell<StableBTreeMap<String, Pubkey, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(_POOL_ADDR_MEMORY_ID))));
 
     static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), Pubkey::from_str(DEFAULT_FEE_COLLECTOR).expect("invalid pubkey: fee collector"))
@@ -107,6 +123,12 @@ thread_local! {
     static ORCHESTRATOR: RefCell<Cell<Principal, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(ORCHESTRATOR_MEMORY_ID)), Principal::from_str(ORCHESTRATOR_CANISTER).expect("invalid principal: orchestrator"))
                      .expect("fail to init a StableCell"));
+
+    static BLOCKS: RefCell<StableBTreeMap<u32, NewBlockInfo, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(BLOCKS_ID))));
+
+    static TX_RECORDS: RefCell<StableBTreeMap<(Txid, bool), TxRecord, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(TX_RECORDS_ID))));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -118,17 +140,17 @@ fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R
     })
 }
 
-pub(crate) fn with_pool<F, R>(id: &Pubkey, f: F) -> R
+pub(crate) fn with_pool<F, R>(id: &String, f: F) -> R
 where
     F: Fn(&Option<LiquidityPool>) -> R,
 {
     POOLS.with_borrow(|p| {
-        let pool = p.get(&id);
+        let pool = p.get(id);
         f(&pool)
     })
 }
 
-pub(crate) fn with_pool_mut<F>(id: &Pubkey, f: F) -> Result<(), ExchangeError>
+pub(crate) fn with_pool_mut<F>(id: String, f: F) -> Result<(), ExchangeError>
 where
     F: FnOnce(Option<LiquidityPool>) -> Result<Option<LiquidityPool>, ExchangeError>,
 {
@@ -152,21 +174,21 @@ pub(crate) fn get_pools() -> Vec<LiquidityPool> {
     POOLS.with_borrow(|p| p.iter().map(|p| p.1.clone()).collect::<Vec<_>>())
 }
 
-pub(crate) fn find_pool(pubkey: &Pubkey) -> Option<LiquidityPool> {
-    with_pool(pubkey, |p| p.clone())
+pub(crate) fn find_pool(addr: &String) -> Option<LiquidityPool> {
+    with_pool(addr, |p| p.clone())
 }
 
 pub(crate) fn has_pool(id: &CoinId) -> bool {
     POOL_TOKENS.with_borrow(|p| p.contains_key(&id))
 }
 
-pub(crate) fn with_pool_name(id: &CoinId) -> Option<Pubkey> {
-    POOL_TOKENS.with_borrow(|p| p.get(&id))
+pub(crate) fn with_pool_name(id: &CoinId) -> Option<String> {
+    POOL_TOKENS.with_borrow(|p| p.get(&id).clone())
 }
 
-pub(crate) fn with_pool_addr(addr: &String) -> Option<Pubkey> {
-    POOL_ADDR.with_borrow(|p| p.get(addr))
-}
+// pub(crate) fn with_pool_addr(addr: &String) -> Option<Pubkey> {
+//     POOL_ADDR.with_borrow(|p| p.get(addr))
+// }
 
 pub(crate) fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
     let secp = Secp256k1::new();
@@ -217,11 +239,11 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, untweaked: Pubkey) -> Result<(),
             .expect("didn't set fee rate");
     let addr = pool.addr.clone();
     POOL_TOKENS.with_borrow_mut(|l| {
-        l.insert(id, untweaked.clone());
+        l.insert(id, addr.clone());
         POOLS.with_borrow_mut(|p| {
-            p.insert(untweaked.clone(), pool);
+            p.insert(addr, pool);
         });
-        POOL_ADDR.with_borrow_mut(|p| p.insert(addr, untweaked));
+        // POOL_ADDR.with_borrow_mut(|p| p.insert(addr, untweaked));
     });
     Ok(())
 }

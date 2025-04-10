@@ -49,6 +49,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d965446196e3b7decd44aa7ee49e31d630118f90ef12f97900f262eb915c951d"
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "binread"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -578,6 +587,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ree-types"
+version = "0.4.1"
+source = "git+https://github.com/octopus-network/ree-types.git?rev=1bc6810a7aac2576c32bdca26b6dd399b1a307eb#1bc6810a7aac2576c32bdca26b6dd399b1a307eb"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "bitcoin",
+ "candid",
+ "generic-array",
+ "hex",
+ "ic-cdk",
+ "ic-stable-structures",
+ "serde",
+ "serde_bytes",
+ "thiserror",
+]
+
+[[package]]
 name = "rich-swap"
 version = "0.1.0"
 dependencies = [
@@ -595,7 +622,8 @@ dependencies = [
  "ic-log",
  "ic-stable-structures",
  "lazy_static",
- "ree-types",
+ "ree-types 0.3.0",
+ "ree-types 0.4.1",
  "rune-indexer",
  "serde",
  "serde_json",

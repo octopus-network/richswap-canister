@@ -4,6 +4,7 @@ use crate::{
 };
 use candid::{CandidType, Deserialize, Principal};
 use ic_canister_log::log;
+use ic_cdk::api::management_canister::bitcoin::BitcoinNetwork;
 use ic_cdk_macros::{query, update};
 use ic_log::*;
 use ree_types::{
@@ -31,7 +32,7 @@ pub fn get_fee_collector() -> Pubkey {
 #[update]
 pub async fn create(rune_id: CoinId) -> Result<Pubkey, ExchangeError> {
     match crate::with_pool_name(&rune_id) {
-        Some(pubkey) => crate::with_pool(&pubkey, |pool| {
+        Some(addr) => crate::with_pool(&addr, |pool| {
             pool.as_ref()
                 .filter(|p| p.states.is_empty())
                 .map(|p| p.pubkey.clone())
@@ -74,8 +75,8 @@ pub struct ExtractFeeOffer {
 }
 
 #[query]
-pub fn pre_extract_fee(pool_key: Pubkey) -> Result<ExtractFeeOffer, ExchangeError> {
-    crate::with_pool(&pool_key, |p| {
+pub fn pre_extract_fee(addr: String) -> Result<ExtractFeeOffer, ExchangeError> {
+    crate::with_pool(&addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         let value = pool.available_to_extract()?;
         let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
@@ -98,8 +99,8 @@ pub struct Liquidity {
 }
 
 #[query]
-pub fn get_lp(pool_key: Pubkey, user_addr: String) -> Result<Liquidity, ExchangeError> {
-    crate::with_pool(&pool_key, |p| {
+pub fn get_lp(addr: String, user_addr: String) -> Result<Liquidity, ExchangeError> {
+    crate::with_pool(&addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         pool.states
             .last()
@@ -114,92 +115,8 @@ pub fn get_lp(pool_key: Pubkey, user_addr: String) -> Result<Liquidity, Exchange
     })
 }
 
-#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct WithdrawalOffer {
-    pub input: Utxo,
-    pub user_outputs: Vec<CoinBalance>,
-    pub nonce: u64,
-}
-
 #[query]
-pub fn pre_withdraw_liquidity(
-    pool_key: Pubkey,
-    user_addr: String,
-    share: u128,
-) -> Result<WithdrawalOffer, ExchangeError> {
-    crate::with_pool(&pool_key, |p| {
-        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let (btc, rune_output, _) = pool.available_to_withdraw(&user_addr, share)?;
-        let state = pool.states.last().expect("already checked");
-        Ok(WithdrawalOffer {
-            input: state.utxo.clone().expect("already checked"),
-            user_outputs: vec![
-                CoinBalance {
-                    id: CoinId::btc(),
-                    value: btc as u128,
-                },
-                rune_output,
-            ],
-            nonce: state.nonce,
-        })
-    })
-}
-
-#[derive(Eq, PartialEq, CandidType, Clone, Debug, Deserialize, Serialize)]
-pub struct LiquidityOffer {
-    pub inputs: Option<Utxo>,
-    pub output: CoinBalance,
-    pub nonce: u64,
-}
-
-#[query]
-pub fn pre_add_liquidity(
-    pool_key: Pubkey,
-    side: CoinBalance,
-) -> Result<LiquidityOffer, ExchangeError> {
-    crate::with_pool(&pool_key, |p| {
-        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let another = pool.liquidity_should_add(side)?;
-        let state = pool.states.last().clone();
-        Ok(LiquidityOffer {
-            inputs: state.map(|s| s.utxo.clone()).flatten(),
-            output: another,
-            nonce: state.map(|s| s.nonce).unwrap_or_default(),
-        })
-    })
-}
-
-#[derive(Eq, PartialEq, CandidType, Clone, Debug, Deserialize, Serialize)]
-pub struct SwapOffer {
-    pub input: Utxo,
-    pub output: CoinBalance,
-    pub nonce: u64,
-}
-
-#[query]
-pub fn pre_swap(id: Pubkey, input: CoinBalance) -> Result<SwapOffer, ExchangeError> {
-    crate::with_pool(&id, |p| {
-        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let recent_state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let (offer, _, _) = pool.available_to_swap(input)?;
-        Ok(SwapOffer {
-            input: recent_state.utxo.clone().expect("already checked"),
-            output: offer,
-            nonce: recent_state.nonce,
-        })
-    })
-}
-
-/// REE API
-#[query]
-fn get_minimal_tx_value(_args: GetMinimalTxValueArgs) -> GetMinimalTxValueResponse {
-    pool::MIN_BTC_VALUE
-}
-
-/// REE API
-#[query]
-pub fn get_pool_list(args: GetPoolListArgs) -> GetPoolListResponse {
-    let GetPoolListArgs { from, limit } = args;
+pub fn list_pools(from: Option<String>, limit: usize) -> Vec<PoolInfo> {
     let mut pools = crate::get_pools();
     pools.sort_by(|p0, p1| {
         let r0 = p0.states.last().map(|s| s.btc_supply()).unwrap_or_default();
@@ -208,7 +125,7 @@ pub fn get_pool_list(args: GetPoolListArgs) -> GetPoolListResponse {
     });
     pools
         .iter()
-        .skip_while(|p| from.as_ref().map_or(false, |from| p.pubkey != *from))
+        .skip_while(|p| from.as_ref().map_or(false, |from| &p.addr != from))
         .take(limit as usize + from.as_ref().map_or(0, |_| 1))
         .skip(from.as_ref().map_or(0, |_| 1))
         .map(|p| PoolInfo {
@@ -242,12 +159,106 @@ pub fn get_pool_list(args: GetPoolListArgs) -> GetPoolListResponse {
         .collect()
 }
 
+#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WithdrawalOffer {
+    pub input: Utxo,
+    pub user_outputs: Vec<CoinBalance>,
+    pub nonce: u64,
+}
+
+#[query]
+pub fn pre_withdraw_liquidity(
+    pool_addr: String,
+    user_addr: String,
+    share: u128,
+) -> Result<WithdrawalOffer, ExchangeError> {
+    crate::with_pool(&pool_addr, |p| {
+        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
+        let (btc, rune_output, _) = pool.available_to_withdraw(&user_addr, share)?;
+        let state = pool.states.last().expect("already checked");
+        Ok(WithdrawalOffer {
+            input: state.utxo.clone().expect("already checked"),
+            user_outputs: vec![
+                CoinBalance {
+                    id: CoinId::btc(),
+                    value: btc as u128,
+                },
+                rune_output,
+            ],
+            nonce: state.nonce,
+        })
+    })
+}
+
+#[derive(Eq, PartialEq, CandidType, Clone, Debug, Deserialize, Serialize)]
+pub struct LiquidityOffer {
+    pub inputs: Option<Utxo>,
+    pub output: CoinBalance,
+    pub nonce: u64,
+}
+
+#[query]
+pub fn pre_add_liquidity(
+    pool_addr: String,
+    side: CoinBalance,
+) -> Result<LiquidityOffer, ExchangeError> {
+    crate::with_pool(&pool_addr, |p| {
+        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
+        let another = pool.liquidity_should_add(side)?;
+        let state = pool.states.last().clone();
+        Ok(LiquidityOffer {
+            inputs: state.map(|s| s.utxo.clone()).flatten(),
+            output: another,
+            nonce: state.map(|s| s.nonce).unwrap_or_default(),
+        })
+    })
+}
+
+#[derive(Eq, PartialEq, CandidType, Clone, Debug, Deserialize, Serialize)]
+pub struct SwapOffer {
+    pub input: Utxo,
+    pub output: CoinBalance,
+    pub nonce: u64,
+}
+
+#[query]
+pub fn pre_swap(id: String, input: CoinBalance) -> Result<SwapOffer, ExchangeError> {
+    crate::with_pool(&id, |p| {
+        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
+        let recent_state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let (offer, _, _) = pool.available_to_swap(input)?;
+        Ok(SwapOffer {
+            input: recent_state.utxo.clone().expect("already checked"),
+            output: offer,
+            nonce: recent_state.nonce,
+        })
+    })
+}
+
+/// REE API
+#[query]
+fn get_minimal_tx_value(_args: GetMinimalTxValueArgs) -> GetMinimalTxValueResponse {
+    pool::MIN_BTC_VALUE
+}
+
+/// REE API
+#[query]
+pub fn get_pool_list() -> GetPoolListResponse {
+    let pools = crate::get_pools();
+    pools
+        .iter()
+        .map(|p| PoolBasic {
+            name: p.meta.symbol.clone(),
+            address: p.addr.clone(),
+        })
+        .collect()
+}
+
 /// REE API
 #[query]
 pub fn get_pool_info(args: GetPoolInfoArgs) -> GetPoolInfoResponse {
-    let GetPoolInfoArgs { pool_address } = args;
-    let pool_key = crate::with_pool_addr(&pool_address)?;
-    crate::find_pool(&pool_key).map(|p| PoolInfo {
+    // let pool_key = crate::with_pool_addr(&pool_address)?;
+    crate::find_pool(&args.pool_address).map(|p| PoolInfo {
         key: p.pubkey.clone(),
         name: p.meta.symbol.clone(),
         key_derivation_path: vec![p.meta.id.to_bytes()],
@@ -274,32 +285,119 @@ pub fn get_pool_info(args: GetPoolInfoArgs) -> GetPoolInfoResponse {
     })
 }
 
-/// REE API
 #[update(guard = "ensure_orchestrator")]
 pub fn rollback_tx(args: RollbackTxArgs) -> RollbackTxResponse {
-    if let Err(e) = crate::with_pool_mut(&args.pool_key, |p| {
-        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
-        pool.rollback(args.txid)?;
-        Ok(Some(pool))
-    }) {
-        log!(ERROR, "Rollback tx {}: {}", e, args.txid);
-        return Err(e.to_string());
-    }
-    return Ok(());
+    crate::TX_RECORDS.with_borrow(|m| {
+        // Look up the transaction record (both confirmed and unconfirmed)
+        let maybe_unconfirmed_record = m.get(&(args.txid.clone(), false));
+        let maybe_confirmed_record = m.get(&(args.txid.clone(), true));
+        let record = maybe_confirmed_record
+            .or(maybe_unconfirmed_record)
+            .ok_or("Txid not found")?;
+        ic_cdk::println!(
+            "rollback txid: {} with pools: {:?}",
+            args.txid,
+            record.pools
+        );
+        // Roll back each affected pool to its state before this transaction
+        for addr in record.pools.iter() {
+            crate::with_pool_mut(addr.clone(), |p| {
+                let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+                pool.rollback(args.txid)?;
+                Ok(Some(pool))
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })
 }
 
-/// REE API
 #[update(guard = "ensure_orchestrator")]
-pub fn finalize_tx(args: FinalizeTxArgs) -> FinalizeTxResponse {
-    if let Err(e) = crate::with_pool_mut(&args.pool_key, |p| {
-        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
-        pool.finalize(args.txid)?;
-        Ok(Some(pool))
-    }) {
-        log!(ERROR, "Finalizing tx {}: {}", e, args.txid);
-        return Err(e.to_string());
+pub fn new_block(args: NewBlockArgs) -> NewBlockResponse {
+    // Check for blockchain reorganizations
+    match crate::reorg::detect_reorg(BitcoinNetwork::Testnet, args.clone()) {
+        Ok(_) => {}
+        Err(crate::reorg::Error::DuplicateBlock { height, hash }) => {
+            return Err(format!(
+                "Duplicate block detected at height {} with hash {}",
+                height, hash
+            ));
+        }
+        Err(crate::reorg::Error::Unrecoverable) => {
+            return Err("Unrecoverable reorg detected".to_string());
+        }
+        Err(crate::reorg::Error::Recoverable { height, depth }) => {
+            crate::reorg::handle_reorg(height, depth);
+        }
     }
-    return Ok(());
+    let NewBlockArgs {
+        block_height,
+        block_hash: _,
+        block_timestamp: _,
+        confirmed_txids,
+    } = args.clone();
+
+    // Store the new block information
+    crate::BLOCKS.with_borrow_mut(|m| {
+        m.insert(block_height, args);
+        ic_cdk::println!("new block {} inserted into blocks", block_height,);
+    });
+
+    // Mark transactions as confirmed
+    for txid in confirmed_txids {
+        crate::TX_RECORDS.with_borrow_mut(|m| {
+            if let Some(record) = m.get(&(txid.clone(), false)) {
+                m.insert((txid.clone(), true), record.clone());
+                ic_cdk::println!("confirm txid: {} with pools: {:?}", txid, record.pools);
+            }
+        });
+    }
+    // Calculate the height below which blocks are considered fully confirmed (beyond reorg risk)
+    let confirmed_height =
+        block_height - crate::reorg::get_max_recoverable_reorg_depth(BitcoinNetwork::Testnet) + 1;
+
+    // Finalize transactions in confirmed blocks
+    crate::BLOCKS.with_borrow(|m| {
+        m.iter()
+            .take_while(|(height, _)| *height <= confirmed_height)
+            .for_each(|(height, block_info)| {
+                ic_cdk::println!("finalizing txs in block: {}", height);
+                block_info.confirmed_txids.iter().for_each(|txid| {
+                    crate::TX_RECORDS.with_borrow_mut(|m| {
+                        if let Some(record) = m.get(&(txid.clone(), true)) {
+                            ic_cdk::println!(
+                                "finalize txid: {} with pools: {:?}",
+                                txid,
+                                record.pools
+                            );
+                            // Make transaction state permanent in each affected pool
+                            record.pools.iter().for_each(|addr| {
+                                crate::with_pool_mut(addr.clone(), |p| {
+                                    let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+                                    pool.finalize(txid.clone())?;
+                                    Ok(Some(pool))
+                                })
+                                .unwrap();
+                            });
+                        }
+                    });
+                });
+            });
+    });
+
+    // Clean up old block data that's no longer needed
+    crate::BLOCKS.with_borrow_mut(|m| {
+        let heights_to_remove: Vec<u32> = m
+            .iter()
+            .take_while(|(height, _)| *height <= confirmed_height)
+            .map(|(height, _)| height)
+            .collect();
+        for height in heights_to_remove {
+            ic_cdk::println!("removing block: {}", height);
+            m.remove(&height);
+        }
+    });
+    Ok(())
 }
 
 /// REE API
@@ -327,10 +425,10 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         input_coins,
         output_coins,
     } = intention;
-    let pool_key = crate::with_pool_addr(&pool_address)
-        .ok_or(ExchangeError::PoolAddressNotFound.to_string())?;
-    let pool =
-        crate::with_pool(&pool_key, |p| p.clone()).ok_or(ExchangeError::InvalidPool.to_string())?;
+    // let pool_key = crate::with_pool_addr(&pool_address)
+    //     .ok_or(ExchangeError::PoolAddressNotFound.to_string())?;
+    let pool = crate::with_pool(&pool_address, |p| p.clone())
+        .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
         "add_liquidity" => {
             let (new_state, consumed) = pool
@@ -349,7 +447,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                     .await
                     .map_err(|e| e.to_string())?;
             }
-            crate::with_pool_mut(&pool_key, |p| {
+            crate::with_pool_mut(pool_address, |p| {
                 let mut pool = p.expect("already checked in pre_add_liquidity;qed");
                 pool.commit(new_state);
                 Ok(Some(pool))
@@ -374,7 +472,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
                 .await
                 .map_err(|e| e.to_string())?;
-            crate::with_pool_mut(&pool_key, |p| {
+            crate::with_pool_mut(pool_address, |p| {
                 let mut pool = p.expect("already checked in available_to_withdraw;qed");
                 pool.commit(new_state);
                 Ok(Some(pool))
@@ -395,7 +493,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
                 .await
                 .map_err(|e| e.to_string())?;
-            crate::with_pool_mut(&pool_key, |p| {
+            crate::with_pool_mut(pool_address, |p| {
                 let mut pool = p.expect("already checked in extract_fee;qed");
                 pool.commit(new_state);
                 Ok(Some(pool))
@@ -416,7 +514,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
                 .await
                 .map_err(|e| e.to_string())?;
-            crate::with_pool_mut(&pool_key, |p| {
+            crate::with_pool_mut(pool_address, |p| {
                 let mut pool = p.expect("already checked in pre_swap;qed");
                 pool.commit(new_state);
                 Ok(Some(pool))
