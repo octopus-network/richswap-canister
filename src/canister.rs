@@ -4,7 +4,7 @@ use crate::{
 };
 use candid::{CandidType, Deserialize, Principal};
 use ic_canister_log::log;
-use ic_cdk::api::management_canister::bitcoin::BitcoinNetwork;
+use ic_cdk::{api::management_canister::bitcoin::BitcoinNetwork, post_upgrade};
 use ic_cdk_macros::{query, update};
 use ic_log::*;
 use ree_types::{
@@ -13,6 +13,11 @@ use ree_types::{
 use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
 use std::str::FromStr;
+
+#[post_upgrade]
+pub fn upgrade() {
+    crate::migrate::migrate_to_v3();
+}
 
 #[update(guard = "ensure_owner")]
 pub fn set_fee_collector(pubkey: Pubkey) {
@@ -252,6 +257,13 @@ pub fn get_pool_list() -> GetPoolListResponse {
             address: p.addr.clone(),
         })
         .collect()
+}
+
+use crate::pool::LiquidityPool;
+
+#[query]
+pub fn get_pool_list_test() -> Vec<LiquidityPool> {
+    crate::get_pools()
 }
 
 /// REE API

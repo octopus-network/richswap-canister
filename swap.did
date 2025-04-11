@@ -1,4 +1,5 @@
 type CoinBalance = record { id : text; value : nat };
+type CoinMeta = record { id : text; min_amount : nat; symbol : text };
 type ExchangeError = variant {
   InvalidSignPsbtArgs : text;
   InvalidNumeric;
@@ -64,6 +65,15 @@ type LiquidityOffer = record {
   inputs : opt Utxo;
   nonce : nat64;
 };
+type LiquidityPool = record {
+  states : vec PoolState;
+  addr : text;
+  meta : CoinMeta;
+  burn_rate : nat64;
+  pubkey : text;
+  fee_rate : nat64;
+  tweaked : text;
+};
 type NewBlockInfo = record {
   block_hash : text;
   confirmed_txids : vec text;
@@ -82,6 +92,15 @@ type PoolInfo = record {
   address : text;
   nonce : nat64;
   utxos : vec Utxo;
+};
+type PoolState = record {
+  k : nat;
+  id : opt text;
+  lp : vec record { text; nat };
+  lp_earnings : vec record { text; nat64 };
+  utxo : opt Utxo;
+  incomes : nat64;
+  nonce : nat64;
 };
 type Result = variant { Ok : text; Err : ExchangeError };
 type Result_1 = variant { Ok : text; Err : text };
@@ -112,6 +131,7 @@ service : {
   get_minimal_tx_value : (GetMinimalTxValueArgs) -> (nat64) query;
   get_pool_info : (GetPoolInfoArgs) -> (opt PoolInfo) query;
   get_pool_list : () -> (vec PoolBasic) query;
+  get_pool_list_test : () -> (vec LiquidityPool) query;
   list_pools : (opt text, nat64) -> (vec PoolInfo) query;
   new_block : (NewBlockInfo) -> (Result_3);
   pre_add_liquidity : (text, CoinBalance) -> (Result_4) query;
