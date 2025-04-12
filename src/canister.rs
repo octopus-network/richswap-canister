@@ -12,6 +12,7 @@ use ree_types::{
 };
 use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 #[post_upgrade]
@@ -35,12 +36,12 @@ pub fn get_fee_collector() -> Pubkey {
 }
 
 #[update]
-pub async fn create(rune_id: CoinId) -> Result<Pubkey, ExchangeError> {
+pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
     match crate::with_pool_name(&rune_id) {
         Some(addr) => crate::with_pool(&addr, |pool| {
             pool.as_ref()
                 .filter(|p| p.states.is_empty())
-                .map(|p| p.pubkey.clone())
+                .map(|p| p.addr.clone())
                 .ok_or(ExchangeError::PoolAlreadyExists)
         }),
         None => {
@@ -66,8 +67,7 @@ pub async fn create(rune_id: CoinId) -> Result<Pubkey, ExchangeError> {
                 symbol: name,
                 min_amount: 1,
             };
-            crate::create_empty_pool(meta, untweaked_pubkey.clone())?;
-            Ok(untweaked_pubkey)
+            crate::create_empty_pool(meta, untweaked_pubkey.clone())
         }
     }
 }
@@ -116,6 +116,17 @@ pub fn get_lp(addr: String, user_addr: String) -> Result<Liquidity, ExchangeErro
                     total_share: s.k,
                 })
             })
+            .ok_or(ExchangeError::EmptyPool)
+    })
+}
+
+#[query]
+pub fn get_all_lp(addr: String) -> Result<BTreeMap<String, u128>, ExchangeError> {
+    crate::with_pool(&addr, |p| {
+        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
+        pool.states
+            .last()
+            .map(|s| s.lp.clone())
             .ok_or(ExchangeError::EmptyPool)
     })
 }
@@ -257,13 +268,6 @@ pub fn get_pool_list() -> GetPoolListResponse {
             address: p.addr.clone(),
         })
         .collect()
-}
-
-use crate::pool::LiquidityPool;
-
-#[query]
-pub fn get_pool_list_test() -> Vec<LiquidityPool> {
-    crate::get_pools()
 }
 
 /// REE API

@@ -64,7 +64,6 @@ pub struct PoolState {
     pub incomes: u64,
     pub k: u128,
     pub lp: BTreeMap<String, u128>,
-    #[serde(default)]
     pub lp_earnings: BTreeMap<String, u64>,
 }
 

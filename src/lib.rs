@@ -87,8 +87,8 @@ const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
 const _POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
 // migrate from v1 to v2
 const POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
-// the v3 is addr -> pool
-const POOLS_MEMORY_ID: MemoryId = MemoryId::new(6);
+// the v3 is addr -> pool, notice: 6 is deprecated in the testnet
+const POOLS_MEMORY_ID: MemoryId = MemoryId::new(10);
 // the v3 is token -> addr
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(7);
 
@@ -101,7 +101,7 @@ thread_local! {
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
 
-    static POOLS_V2: RefCell<StableBTreeMap<Pubkey, LiquidityPool, Memory>> =
+    static POOLS_V2: RefCell<StableBTreeMap<Pubkey, crate::migrate::LiquidityPoolV2, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
 
     static POOLS: RefCell<StableBTreeMap<String, LiquidityPool, Memory>> =
@@ -229,7 +229,10 @@ pub(crate) async fn sign_prehash_with_schnorr(
     Ok(signature)
 }
 
-pub(crate) fn create_empty_pool(meta: CoinMeta, untweaked: Pubkey) -> Result<(), ExchangeError> {
+pub(crate) fn create_empty_pool(
+    meta: CoinMeta,
+    untweaked: Pubkey,
+) -> Result<String, ExchangeError> {
     if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
     }
@@ -241,11 +244,10 @@ pub(crate) fn create_empty_pool(meta: CoinMeta, untweaked: Pubkey) -> Result<(),
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, addr.clone());
         POOLS.with_borrow_mut(|p| {
-            p.insert(addr, pool);
+            p.insert(addr.clone(), pool);
         });
-        // POOL_ADDR.with_borrow_mut(|p| p.insert(addr, untweaked));
     });
-    Ok(())
+    Ok(addr)
 }
 
 pub(crate) fn p2tr_untweaked(pubkey: &Pubkey) -> String {
