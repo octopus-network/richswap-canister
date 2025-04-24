@@ -29,9 +29,11 @@ ree-types = { git =  "https://github.com/octopus-network/ree-types.git", rev = "
 rune-indexer = { path = "./crates/rune-indexer" }
 ic-log = { path = "./crates/ic-log" }
 chain-key = { path = "./crates/chain-key" }
+bitcoin-canister = { path = "./crates/bitcoin-canister" }
 ic-canisters-http-types = { git = "https://github.com/dfinity/ic", tag = "release-2024-03-06_23-01+p2p" }
 ic-canister-log = { git = "https://github.com/dfinity/ic", tag = "release-2024-01-18_23-01" }
 serde_json = "1.0"
+serde_bytes = "0.11.17"
 
 [features]
 testnet = []

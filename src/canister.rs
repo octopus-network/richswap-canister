@@ -8,7 +8,8 @@ use ic_cdk::{api::management_canister::bitcoin::BitcoinNetwork, post_upgrade};
 use ic_cdk_macros::{query, update};
 use ic_log::*;
 use ree_types::{
-    bitcoin::psbt::Psbt, exchange_interfaces::*, CoinBalance, CoinId, Intention, Pubkey, Utxo,
+    bitcoin::psbt::Psbt, exchange_interfaces::*, CoinBalance, CoinId, Intention, Pubkey, TxRecord,
+    Utxo,
 };
 use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
@@ -17,7 +18,10 @@ use std::str::FromStr;
 
 #[post_upgrade]
 pub fn upgrade() {
-    crate::migrate::migrate_to_v3();
+    // crate::migrate::migrate_to_v3();
+    crate::BLOCKS.with_borrow_mut(|m| {
+        m.clear_new();
+    });
 }
 
 #[update(guard = "ensure_owner")]
@@ -33,6 +37,35 @@ pub fn set_orchestrator(principal: Principal) {
 #[query]
 pub fn get_fee_collector() -> Pubkey {
     crate::get_fee_collector()
+}
+
+use ree_types::Txid;
+
+#[query]
+pub fn get_utxo_chain(addr: String) -> Vec<Option<Txid>> {
+    crate::with_pool(&addr, |pool| {
+        pool.as_ref()
+            .unwrap()
+            .states
+            .iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>()
+    })
+}
+
+#[query]
+pub fn get_max_block() -> Option<NewBlockInfo> {
+    crate::get_max_block()
+}
+
+#[query]
+pub fn get_block(height: u32) -> Option<NewBlockInfo> {
+    crate::get_block(height)
+}
+
+#[query]
+pub fn get_tx_affected(txid: Txid) -> Option<TxRecord> {
+    crate::get_tx_affected(txid)
 }
 
 #[update]
@@ -70,6 +103,31 @@ pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
             crate::create_empty_pool(meta, untweaked_pubkey.clone())
         }
     }
+}
+
+#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UtxoToBeMerge {
+    pub utxos: Vec<Utxo>,
+    pub nonce: u64,
+    pub out_sats: u64,
+    pub out_rune: CoinBalance,
+}
+
+#[query]
+pub async fn pre_sync_with_btc(addr: String) -> Result<UtxoToBeMerge, ExchangeError> {
+    let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
+    let mut utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
+    let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
+    if let Some(ref tracked) = state.utxo {
+        utxos.insert(0, tracked.clone());
+    }
+    let (out_sats, out_rune) = crate::calculate_merge_utxos(&utxos, pool.meta.id);
+    Ok(UtxoToBeMerge {
+        utxos,
+        nonce: state.nonce,
+        out_sats,
+        out_rune,
+    })
 }
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -441,8 +499,6 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         input_coins,
         output_coins,
     } = intention;
-    // let pool_key = crate::with_pool_addr(&pool_address)
-    //     .ok_or(ExchangeError::PoolAddressNotFound.to_string())?;
     let pool = crate::with_pool(&pool_address, |p| p.clone())
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
@@ -532,6 +588,25 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                 .map_err(|e| e.to_string())?;
             crate::with_pool_mut(pool_address, |p| {
                 let mut pool = p.expect("already checked in pre_swap;qed");
+                pool.commit(new_state);
+                Ok(Some(pool))
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        "sync" => {
+            let mut utxos = crate::get_untracked_utxos_of_pool(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            let new_state = pool
+                .validate_merge_utxos(&psbt, txid, nonce, &mut utxos, initiator)
+                .map_err(|e| e.to_string())?;
+            for utxo in utxos {
+                crate::psbt::sign(&mut psbt, &utxo, pool.base_id().to_bytes())
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            crate::with_pool_mut(pool_address, |p| {
+                let mut pool = p.expect("already checked;qed");
                 pool.commit(new_state);
                 Ok(Some(pool))
             })

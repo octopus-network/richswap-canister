@@ -100,6 +100,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitcoin-canister"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "ic-cdk",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "bitcoin-internals"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -609,6 +619,7 @@ name = "rich-swap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitcoin-canister",
  "candid",
  "cfg-if",
  "chain-key",
@@ -626,6 +637,7 @@ dependencies = [
  "ree-types 0.4.1",
  "rune-indexer",
  "serde",
+ "serde_bytes",
  "serde_json",
  "syn 1.0.109",
  "thiserror",

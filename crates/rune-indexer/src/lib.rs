@@ -40,7 +40,7 @@ pub struct RuneEntry {
 pub struct RuneBalance {
     pub confirmations: u32,
     pub divisibility: u8,
-    pub amount: candid::Nat,
+    pub amount: u128,
     pub rune_id: String,
     pub symbol: Option<String>,
 }
