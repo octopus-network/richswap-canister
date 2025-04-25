@@ -96,16 +96,15 @@ const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
 // deprecated
 const _POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
-// migrate from v1 to v2
 const POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
-// the v3 is addr -> pool, notice: 6 is deprecated in the testnet
-const POOLS_MEMORY_ID: MemoryId = MemoryId::new(10);
 // the v3 is token -> addr
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(7);
+// the v3 is addr -> pool, notice: 6 is deprecated in the testnet
+const POOLS_MEMORY_ID: MemoryId = MemoryId::new(10);
 
 const BLOCKS_ID: MemoryId = MemoryId::new(8);
 const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
-const WHITELIST_ID: MemoryId = MemoryId::new(10);
+const WHITELIST_ID: MemoryId = MemoryId::new(11);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -370,12 +369,13 @@ pub(crate) async fn get_confirmed_utxos_of_pool(
     let btc_canister = bitcoin_canister::Service(btc_canister_id);
     let indexer = rune_indexer::Service(indexer_id);
     let (response,): (bitcoin_canister::GetUtxosResponse,) = btc_canister
-        .bitcoin_get_utxos_query(bitcoin_canister::GetUtxosRequest {
+        .bitcoin_get_utxos(bitcoin_canister::GetUtxosRequest {
             network,
             filter: Some(bitcoin_canister::GetUtxosRequestFilterInner::MinConfirmations(1)),
             address: pool.addr.clone(),
         })
         .await
+        .inspect_err(|e| ic_cdk::println!("{:?}", e.1))
         .map_err(|_| ExchangeError::FetchBitcoinCanisterError)?;
     let mut utxos = vec![];
     for utxo in response.utxos {

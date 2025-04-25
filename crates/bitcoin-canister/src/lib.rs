@@ -174,7 +174,12 @@ impl Service {
     }
 
     pub async fn bitcoin_get_utxos(&self, arg0: GetUtxosRequest) -> Result<(GetUtxosResponse,)> {
-        ic_cdk::call(self.0, "bitcoin_get_utxos", (arg0,)).await
+        let cycles = match arg0.network {
+            Network::Mainnet => 10_000_000_000u128,
+            Network::Testnet => 4_000_000_000u128,
+            Network::Regtest => 0u128,
+        };
+        ic_cdk::api::call::call_with_payment128(self.0, "bitcoin_get_utxos", (arg0,), cycles).await
     }
 
     pub async fn bitcoin_get_utxos_query(

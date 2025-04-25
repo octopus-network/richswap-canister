@@ -599,7 +599,7 @@ dependencies = [
 [[package]]
 name = "ree-types"
 version = "0.4.1"
-source = "git+https://github.com/octopus-network/ree-types.git?rev=1bc6810a7aac2576c32bdca26b6dd399b1a307eb#1bc6810a7aac2576c32bdca26b6dd399b1a307eb"
+source = "git+https://github.com/octopus-network/ree-types.git?rev=f21669c412c4dbc8ccf9f066f4c11ac1df453462#f21669c412c4dbc8ccf9f066f4c11ac1df453462"
 dependencies = [
  "anyhow",
  "bincode",

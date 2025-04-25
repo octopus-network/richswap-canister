@@ -19,9 +19,6 @@ use std::str::FromStr;
 #[post_upgrade]
 pub fn upgrade() {
     // crate::migrate::migrate_to_v3();
-    crate::BLOCKS.with_borrow_mut(|m| {
-        m.clear_new();
-    });
 }
 
 #[update(guard = "ensure_owner")]
@@ -113,7 +110,7 @@ pub struct UtxoToBeMerge {
     pub out_rune: CoinBalance,
 }
 
-#[query]
+#[update]
 pub async fn pre_sync_with_btc(addr: String) -> Result<UtxoToBeMerge, ExchangeError> {
     let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
     let mut utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
@@ -392,10 +389,11 @@ pub fn new_block(args: NewBlockArgs) -> NewBlockResponse {
     match crate::reorg::detect_reorg(BitcoinNetwork::Testnet, args.clone()) {
         Ok(_) => {}
         Err(crate::reorg::Error::DuplicateBlock { height, hash }) => {
-            return Err(format!(
+            ic_cdk::println!(
                 "Duplicate block detected at height {} with hash {}",
-                height, hash
-            ));
+                height,
+                hash
+            );
         }
         Err(crate::reorg::Error::Unrecoverable) => {
             return Err("Unrecoverable reorg detected".to_string());
@@ -499,6 +497,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         input_coins,
         output_coins,
     } = intention;
+    let pool_addr = pool_address.clone();
     let pool = crate::with_pool(&pool_address, |p| p.clone())
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
@@ -616,6 +615,16 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             return Err("invalid method".to_string());
         }
     }
+
+    // Record the transaction as unconfirmed and track which pools it affects
+    crate::TX_RECORDS.with_borrow_mut(|m| {
+        ic_cdk::println!("new unconfirmed txid: {} in pool: {} ", txid, pool_addr);
+        let mut record = m.get(&(txid.clone(), false)).unwrap_or_default();
+        if !record.pools.contains(&pool_addr) {
+            record.pools.push(pool_addr.clone());
+        }
+        m.insert((txid.clone(), false), record);
+    });
     Ok(psbt.serialize_hex())
 }
 

@@ -135,7 +135,7 @@ service : {
   pre_add_liquidity : (text, CoinBalance) -> (Result_5) query;
   pre_extract_fee : (text) -> (Result_6) query;
   pre_swap : (text, CoinBalance) -> (Result_7) query;
-  pre_sync_with_btc : (text) -> (Result_8) query;
+  pre_sync_with_btc : (text) -> (Result_8);
   pre_withdraw_liquidity : (text, text, nat) -> (Result_9) query;
   rollback_tx : (RollbackTxArgs) -> (Result_4);
   set_fee_collector : (text) -> ();
