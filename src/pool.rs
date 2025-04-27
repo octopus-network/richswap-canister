@@ -773,8 +773,7 @@ impl LiquidityPool {
     ///   n: user
     /// outputs:
     ///   0: pool
-    ///   1: op_return
-    ///   2: changes
+    ///   1: changes
     pub(crate) fn validate_merge_utxos(
         &self,
         psbt: &Psbt,
@@ -784,18 +783,15 @@ impl LiquidityPool {
         initiator: String,
     ) -> Result<PoolState, ExchangeError> {
         let mut state = self.states.last().ok_or(ExchangeError::EmptyPool)?.clone();
-        if let Some(ref tracked) = state.utxo {
-            expecting_inputs.insert(0, tracked.clone());
-        }
         (state.nonce == nonce)
             .then(|| ())
             .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
         (psbt.unsigned_tx.input.len() == expecting_inputs.len() + 1)
             .then(|| ())
             .ok_or(ExchangeError::InvalidPsbt("inputs not enough".to_string()))?;
-        (psbt.unsigned_tx.output.len() == 3)
+        (psbt.unsigned_tx.output.len() == 2)
             .then(|| ())
-            .ok_or(ExchangeError::InvalidPsbt("outputs must be 3".to_string()))?;
+            .ok_or(ExchangeError::InvalidPsbt("outputs must be 2".to_string()))?;
         crate::WHITELIST
             .with_borrow(|m| m.contains_key(&initiator))
             .then(|| ())
@@ -833,17 +829,13 @@ impl LiquidityPool {
                 "pool output not found".to_string(),
             ))?;
 
-        // the 1 output
-        let maybe_op_return = &psbt.unsigned_tx.output[1];
-        maybe_op_return
-            .script_pubkey
-            .is_op_return()
+        // the 1 output must be NOT op_return since we require only 2 outputs
+        let unknown = &psbt.unsigned_tx.output[1];
+        (!unknown.script_pubkey.is_op_return())
             .then(|| ())
             .ok_or(ExchangeError::InvalidPsbt(
-                "op_return not found".to_string(),
+                "outputs shouldn't contain op_return".to_string(),
             ))?;
-        // TODO check op_return
-        let op_return = maybe_op_return.script_pubkey.as_bytes();
         let (out_sats, out_rune) = crate::calculate_merge_utxos(expecting_inputs, self.base_id());
         (maybe_pool_output.value.to_sat() == out_sats)
             .then(|| ())

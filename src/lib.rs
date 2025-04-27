@@ -13,6 +13,7 @@ use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
     Cell, DefaultMemoryImpl, StableBTreeMap,
 };
+use ordinals::{Artifact, Edict, Runestone};
 use ree_types::{
     bitcoin::{key::TapTweak, secp256k1::Secp256k1, Address, Network},
     exchange_interfaces::*,
@@ -332,25 +333,12 @@ pub(crate) fn calculate_merge_utxos(utxos: &[Utxo], rune_id: CoinId) -> (u64, Co
 pub(crate) async fn get_untracked_utxos_of_pool(
     pool: &LiquidityPool,
 ) -> Result<Vec<Utxo>, ExchangeError> {
-    let mut confirmed = get_confirmed_utxos_of_pool(pool).await?;
+    let confirmed = get_confirmed_utxos_of_pool(pool).await?;
     if confirmed.is_empty() || confirmed.len() == 1 {
         return Err(ExchangeError::NoConfirmedUtxos);
     }
-    // NOTICE: the utxo_chain doesn't contain the empty state, i.e., the state that utxo has been fully consumed or just created
-    let utxo_chain = pool
-        .states
-        .iter()
-        .filter_map(|s| s.utxo.clone())
-        .collect::<Vec<_>>();
-    // there are some utxos untracked, but we need to identify the tracked one
-    for utxo in utxo_chain {
-        let key = utxo.outpoint();
-        if confirmed.contains_key(&key) {
-            confirmed.remove(&key);
-            return Ok(confirmed.into_values().collect());
-        }
-    }
-    Err(ExchangeError::UtxoMismatch)
+    // TODO if some tx is confirming based on the tracking UTXO of pool, the mempool will reject this
+    Ok(confirmed.values().cloned().collect::<Vec<_>>())
 }
 
 /// fetch utxos of pool from btc canister & rune indexer
@@ -423,4 +411,28 @@ pub(crate) async fn get_confirmed_utxos_of_pool(
         .into_iter()
         .map(|utxo| (utxo.outpoint(), utxo.clone()))
         .collect())
+}
+
+pub fn get_edicts_in_tx(tx: &ree_types::bitcoin::Transaction) -> Result<Vec<Edict>, ExchangeError> {
+    let maybe_runestone = Runestone::decipher(tx);
+    if let Some(artifact) = maybe_runestone {
+        match artifact {
+            Artifact::Runestone(rune_stone) => {
+                if rune_stone.etching.is_some() {
+                    return Err(ExchangeError::InvalidPsbt("".to_string()));
+                }
+                if rune_stone.mint.is_some() {
+                    return Err(ExchangeError::InvalidPsbt("".to_string()));
+                }
+                if rune_stone.pointer.is_some() {
+                    return Err(ExchangeError::InvalidPsbt("".to_string()));
+                }
+                return Ok(rune_stone.edicts.clone());
+            }
+            Artifact::Cenotaph(_) => {
+                return Err(ExchangeError::InvalidPsbt("".to_string()));
+            }
+        }
+    }
+    Ok(Vec::new())
 }

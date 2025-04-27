@@ -17,9 +17,7 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 #[post_upgrade]
-pub fn upgrade() {
-    // crate::migrate::migrate_to_v3();
-}
+pub fn upgrade() {}
 
 #[update(guard = "ensure_owner")]
 pub fn set_fee_collector(pubkey: Pubkey) {
@@ -113,11 +111,8 @@ pub struct UtxoToBeMerge {
 #[update]
 pub async fn pre_sync_with_btc(addr: String) -> Result<UtxoToBeMerge, ExchangeError> {
     let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
-    let mut utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
+    let utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
     let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
-    if let Some(ref tracked) = state.utxo {
-        utxos.insert(0, tracked.clone());
-    }
     let (out_sats, out_rune) = crate::calculate_merge_utxos(&utxos, pool.meta.id);
     Ok(UtxoToBeMerge {
         utxos,
@@ -626,6 +621,56 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         m.insert((txid.clone(), false), record);
     });
     Ok(psbt.serialize_hex())
+}
+
+#[derive(Eq, PartialEq, CandidType, Clone, Debug, Deserialize, Serialize)]
+pub struct TxRecordInfo {
+    txid: String,
+    confirmed: bool,
+    records: Vec<String>,
+}
+
+#[query]
+pub fn query_tx_records() -> Result<Vec<TxRecordInfo>, String> {
+    let res = crate::TX_RECORDS.with_borrow(|t| {
+        t.iter()
+            .map(|((txid, confirmed), records)| TxRecordInfo {
+                txid: txid.to_string(),
+                confirmed,
+                records: records.pools.clone(),
+            })
+            .collect()
+    });
+
+    Ok(res)
+}
+#[derive(Eq, PartialEq, CandidType, Clone, Debug, Deserialize, Serialize)]
+pub struct BlockInfo {
+    height: u32,
+    hash: String,
+}
+
+#[query]
+pub fn query_blocks() -> Result<Vec<BlockInfo>, String> {
+    let res = crate::BLOCKS.with_borrow(|b| {
+        b.iter()
+            .map(|(_, block)| BlockInfo {
+                height: block.block_height,
+                hash: block.block_hash.clone(),
+            })
+            .collect()
+    });
+
+    Ok(res)
+}
+
+#[query]
+pub fn blocks_tx_records_count() -> Result<(u64, u64), String> {
+    let tx_records_count = crate::TX_RECORDS.with_borrow(|t| t.len());
+
+    let blocks_count = crate::BLOCKS.with_borrow(|b| b.len());
+
+    Ok((blocks_count, tx_records_count))
 }
 
 #[query(hidden = true)]
