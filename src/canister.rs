@@ -380,8 +380,15 @@ pub fn rollback_tx(args: RollbackTxArgs) -> RollbackTxResponse {
 
 #[update(guard = "ensure_orchestrator")]
 pub fn new_block(args: NewBlockArgs) -> NewBlockResponse {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let network = BitcoinNetwork::Testnet;
+        } else {
+            let network = BitcoinNetwork::Mainnet;
+        }
+    }
     // Check for blockchain reorganizations
-    match crate::reorg::detect_reorg(BitcoinNetwork::Testnet, args.clone()) {
+    match crate::reorg::detect_reorg(network, args.clone()) {
         Ok(_) => {}
         Err(crate::reorg::Error::DuplicateBlock { height, hash }) => {
             ic_cdk::println!(
@@ -421,7 +428,7 @@ pub fn new_block(args: NewBlockArgs) -> NewBlockResponse {
     }
     // Calculate the height below which blocks are considered fully confirmed (beyond reorg risk)
     let confirmed_height =
-        block_height - crate::reorg::get_max_recoverable_reorg_depth(BitcoinNetwork::Testnet) + 1;
+        block_height - crate::reorg::get_max_recoverable_reorg_depth(network) + 1;
 
     // Finalize transactions in confirmed blocks
     crate::BLOCKS.with_borrow(|m| {
