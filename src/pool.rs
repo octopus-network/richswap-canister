@@ -2,7 +2,7 @@ use crate::ExchangeError;
 use candid::{CandidType, Deserialize};
 use ic_stable_structures::{storable::Bound, Storable};
 use ree_types::{
-    bitcoin::{Address, Network},
+    bitcoin::{Address, Network, Psbt},
     CoinBalance, CoinId, InputCoin, OutputCoin, Pubkey, Txid, Utxo,
 };
 use serde::Serialize;
@@ -64,7 +64,6 @@ pub struct PoolState {
     pub incomes: u64,
     pub k: u128,
     pub lp: BTreeMap<String, u128>,
-    #[serde(default)]
     pub lp_earnings: BTreeMap<String, u64>,
 }
 
@@ -765,6 +764,111 @@ impl LiquidityPool {
         state.incomes += burn;
         state.id = Some(txid);
         Ok((state, prev_utxo))
+    }
+
+    /// PSBT:
+    ///
+    /// inputs:
+    ///   0 ~ n-1: pool
+    ///   n: user
+    /// outputs:
+    ///   0: pool
+    ///   1: changes
+    pub(crate) fn validate_merge_utxos(
+        &self,
+        psbt: &Psbt,
+        txid: Txid,
+        nonce: u64,
+        expecting_inputs: &mut Vec<Utxo>,
+        initiator: String,
+    ) -> Result<PoolState, ExchangeError> {
+        let mut state = self.states.last().ok_or(ExchangeError::EmptyPool)?.clone();
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        (psbt.unsigned_tx.input.len() == expecting_inputs.len() + 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt("inputs not enough".to_string()))?;
+        (psbt.unsigned_tx.output.len() == 2)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt("outputs must be 2".to_string()))?;
+        crate::WHITELIST
+            .with_borrow(|m| m.contains_key(&initiator))
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidInput)?;
+
+        for (i, utxo) in expecting_inputs.iter().enumerate() {
+            let input = &psbt.unsigned_tx.input[i];
+            let prev_outpoint = input.previous_output;
+            if crate::psbt::cmp(utxo, &prev_outpoint).is_none() {
+                return Err(ExchangeError::InvalidPsbt(
+                    "inputs mismatch with expecting utxo from bitcoin".to_string(),
+                ));
+            }
+        }
+
+        // the 0 output
+        let maybe_pool_output = &psbt.unsigned_tx.output[0];
+        maybe_pool_output
+            .script_pubkey
+            .is_p2tr()
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt(
+                "pool output must be p2tr".to_string(),
+            ))?;
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "testnet")] {
+                let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Testnet4).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
+            } else {
+                let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Bitcoin).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
+            }
+        }
+        (self.addr == recv_address.to_string())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt(
+                "pool output not found".to_string(),
+            ))?;
+
+        // the 1 output must be NOT op_return since we require only 2 outputs
+        let unknown = &psbt.unsigned_tx.output[1];
+        (!unknown.script_pubkey.is_op_return())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt(
+                "outputs shouldn't contain op_return".to_string(),
+            ))?;
+        let (out_sats, out_rune) = crate::calculate_merge_utxos(expecting_inputs, self.base_id());
+        (maybe_pool_output.value.to_sat() == out_sats)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt(
+                "pool output mismatch".to_string(),
+            ))?;
+        (out_sats > state.incomes)
+            .then(|| ())
+            .ok_or(ExchangeError::InsufficientFunds)?;
+        let new_k = crate::sqrt(out_rune.value * (out_sats - state.incomes) as u128);
+        let mut new_lp = BTreeMap::new();
+        for (lp, share) in state.lp.iter() {
+            new_lp.insert(
+                lp.clone(),
+                share
+                    .checked_mul(new_k)
+                    .and_then(|mul| mul.checked_div(state.k))
+                    .ok_or(ExchangeError::Overflow)?,
+            );
+        }
+        let k_adjust = new_lp.values().sum();
+        state.id = Some(txid);
+        state.nonce += 1;
+        state.k = k_adjust;
+        state.lp = new_lp;
+        state.utxo = Some(Utxo {
+            txid,
+            vout: 0,
+            maybe_rune: Some(out_rune),
+            sats: out_sats,
+        });
+        // TODO update k and lp
+        Ok(state)
     }
 
     pub(crate) fn rollback(&mut self, txid: Txid) -> Result<(), ExchangeError> {

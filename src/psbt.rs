@@ -6,7 +6,7 @@ use ree_types::bitcoin::{
     OutPoint, TapSighashType, Witness,
 };
 
-fn cmp<'a>(mine: &'a Utxo, outpoint: &OutPoint) -> Option<&'a Utxo> {
+pub(crate) fn cmp<'a>(mine: &'a Utxo, outpoint: &OutPoint) -> Option<&'a Utxo> {
     (Into::<bitcoin::Txid>::into(mine.txid) == outpoint.txid && mine.vout == outpoint.vout)
         .then(|| mine)
 }
