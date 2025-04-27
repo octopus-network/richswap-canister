@@ -814,7 +814,7 @@ impl LiquidityPool {
             .is_p2tr()
             .then(|| ())
             .ok_or(ExchangeError::InvalidPsbt(
-                "pool output mut be p2tr".to_string(),
+                "pool output must be p2tr".to_string(),
             ))?;
         cfg_if::cfg_if! {
             if #[cfg(feature = "testnet")] {
