@@ -123,6 +123,27 @@ pub async fn pre_sync_with_btc(addr: String) -> Result<UtxoToBeMerge, ExchangeEr
 }
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DonateIntention {
+    pub input: Utxo,
+    pub nonce: u64,
+    pub out_rune: CoinBalance,
+    pub out_sats: u64,
+}
+
+#[update]
+pub async fn pre_donate(pool: String, input_sats: u64) -> Result<DonateIntention, ExchangeError> {
+    let pool = crate::with_pool(&pool, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
+    let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
+    let (out_rune, out_sats) = pool.wish_to_donate(input_sats)?;
+    Ok(DonateIntention {
+        input: state.utxo.clone().ok_or(ExchangeError::EmptyPool)?,
+        nonce: state.nonce,
+        out_rune,
+        out_sats,
+    })
+}
+
+#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExtractFeeOffer {
     pub input: Utxo,
     pub output: CoinBalance,
@@ -353,13 +374,13 @@ pub fn get_pool_info(args: GetPoolInfoArgs) -> GetPoolInfoResponse {
 
 #[update(guard = "ensure_orchestrator")]
 pub fn rollback_tx(args: RollbackTxArgs) -> RollbackTxResponse {
-    crate::TX_RECORDS.with_borrow(|m| {
+    crate::TX_RECORDS.with_borrow_mut(|m| {
         // Look up the transaction record (both confirmed and unconfirmed)
         let maybe_unconfirmed_record = m.get(&(args.txid.clone(), false));
         let maybe_confirmed_record = m.get(&(args.txid.clone(), true));
         let record = maybe_confirmed_record
             .or(maybe_unconfirmed_record)
-            .ok_or("Txid not found")?;
+            .ok_or(format!("Txid not found: {}", args.txid))?;
         ic_cdk::println!(
             "rollback txid: {} with pools: {:?}",
             args.txid,
@@ -374,6 +395,8 @@ pub fn rollback_tx(args: RollbackTxArgs) -> RollbackTxResponse {
             })
             .map_err(|e| e.to_string())?;
         }
+        m.remove(&(args.txid.clone(), false));
+        m.remove(&(args.txid.clone(), true));
         Ok(())
     })
 }
@@ -420,7 +443,7 @@ pub fn new_block(args: NewBlockArgs) -> NewBlockResponse {
     // Mark transactions as confirmed
     for txid in confirmed_txids {
         crate::TX_RECORDS.with_borrow_mut(|m| {
-            if let Some(record) = m.get(&(txid.clone(), false)) {
+            if let Some(record) = m.remove(&(txid.clone(), false)) {
                 m.insert((txid.clone(), true), record.clone());
                 ic_cdk::println!("confirm txid: {} with pools: {:?}", txid, record.pools);
             }
@@ -453,6 +476,7 @@ pub fn new_block(args: NewBlockArgs) -> NewBlockResponse {
                                 })
                                 .unwrap();
                             });
+                            m.remove(&(txid.clone(), true));
                         }
                     });
                 });
@@ -594,25 +618,46 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             })
             .map_err(|e| e.to_string())?;
         }
-        "sync" => {
-            let mut utxos = crate::get_untracked_utxos_of_pool(&pool)
+        "donate" => {
+            let (new_state, consumed) = pool
+                .validate_donate(
+                    txid,
+                    nonce,
+                    pool_utxo_spend,
+                    pool_utxo_receive,
+                    input_coins,
+                    output_coins,
+                )
+                .map_err(|e| e.to_string())?;
+            crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
                 .await
                 .map_err(|e| e.to_string())?;
-            let new_state = pool
-                .validate_merge_utxos(&psbt, txid, nonce, &mut utxos, initiator)
-                .map_err(|e| e.to_string())?;
-            for utxo in utxos {
-                crate::psbt::sign(&mut psbt, &utxo, pool.base_id().to_bytes())
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
             crate::with_pool_mut(pool_address, |p| {
-                let mut pool = p.expect("already checked;qed");
+                let mut pool = p.expect("already checked in pre_swap;qed");
                 pool.commit(new_state);
                 Ok(Some(pool))
             })
             .map_err(|e| e.to_string())?;
         }
+        // "sync" => {
+        //     let mut utxos = crate::get_untracked_utxos_of_pool(&pool)
+        //         .await
+        //         .map_err(|e| e.to_string())?;
+        //     let new_state = pool
+        //         .validate_merge_utxos(&psbt, txid, nonce, &mut utxos, initiator)
+        //         .map_err(|e| e.to_string())?;
+        //     for utxo in utxos {
+        //         crate::psbt::sign(&mut psbt, &utxo, pool.base_id().to_bytes())
+        //             .await
+        //             .map_err(|e| e.to_string())?;
+        //     }
+        //     crate::with_pool_mut(pool_address, |p| {
+        //         let mut pool = p.expect("already checked;qed");
+        //         pool.commit(new_state);
+        //         Ok(Some(pool))
+        //     })
+        //     .map_err(|e| e.to_string())?;
+        // }
         _ => {
             return Err("invalid method".to_string());
         }
