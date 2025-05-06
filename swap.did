@@ -150,7 +150,7 @@ service : {
   list_pools : (opt text, nat64) -> (vec PoolInfo) query;
   new_block : (NewBlockInfo) -> (Result_5);
   pre_add_liquidity : (text, CoinBalance) -> (Result_6) query;
-  pre_donate : (text, nat64) -> (Result_7);
+  pre_donate : (text, nat64) -> (Result_7) query;
   pre_extract_fee : (text) -> (Result_8) query;
   pre_swap : (text, CoinBalance) -> (Result_9) query;
   pre_sync_with_btc : (text) -> (Result_10);

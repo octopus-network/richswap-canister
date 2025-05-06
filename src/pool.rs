@@ -599,9 +599,13 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::TooSmallFunds)?;
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let btc_supply = recent_state.btc_supply();
+        let total_sats = recent_state
+            .utxo
+            .as_ref()
+            .map(|u| u.sats)
+            .ok_or(ExchangeError::EmptyPool)?;
         let rune_supply = recent_state.rune_supply();
-        (btc_supply != 0 && rune_supply != 0)
+        (total_sats != 0 && rune_supply != 0)
             .then(|| ())
             .ok_or(ExchangeError::EmptyPool)?;
         Ok((
@@ -609,7 +613,7 @@ impl LiquidityPool {
                 value: rune_supply,
                 id: self.meta.id,
             },
-            btc_supply + input_sats,
+            total_sats + input_sats,
         ))
     }
 

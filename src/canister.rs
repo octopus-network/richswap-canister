@@ -130,7 +130,7 @@ pub struct DonateIntention {
     pub out_sats: u64,
 }
 
-#[update]
+#[query]
 pub async fn pre_donate(pool: String, input_sats: u64) -> Result<DonateIntention, ExchangeError> {
     let pool = crate::with_pool(&pool, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
     let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
