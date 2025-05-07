@@ -591,6 +591,104 @@ impl LiquidityPool {
         Ok((state, prev_utxo))
     }
 
+    pub(crate) fn wish_to_donate(
+        &self,
+        input_sats: u64,
+    ) -> Result<(CoinBalance, u64), ExchangeError> {
+        (input_sats >= MIN_BTC_VALUE as u64)
+            .then(|| ())
+            .ok_or(ExchangeError::TooSmallFunds)?;
+        let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let total_sats = recent_state
+            .utxo
+            .as_ref()
+            .map(|u| u.sats)
+            .ok_or(ExchangeError::EmptyPool)?;
+        let rune_supply = recent_state.rune_supply();
+        (total_sats != 0 && rune_supply != 0)
+            .then(|| ())
+            .ok_or(ExchangeError::EmptyPool)?;
+        Ok((
+            CoinBalance {
+                value: rune_supply,
+                id: self.meta.id,
+            },
+            total_sats + input_sats,
+        ))
+    }
+
+    pub(crate) fn validate_donate(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<String>,
+        input_coins: Vec<InputCoin>,
+        output_coins: Vec<OutputCoin>,
+    ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (input_coins.len() == 1 && output_coins.is_empty())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "invalid input/output coins, swap requires 1 input and 0 output".to_string(),
+            ))?;
+        let input = input_coins.first().clone().expect("checked;qed");
+        let mut state = self
+            .states
+            .last()
+            .cloned()
+            .ok_or(ExchangeError::EmptyPool)?;
+        // check nonce
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        let prev_outpoint =
+            pool_utxo_spend
+                .last()
+                .map(|s| s.clone())
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_spend not found".to_string(),
+                ))?;
+        let prev_utxo = state.utxo.clone().ok_or(ExchangeError::EmptyPool)?;
+        (prev_outpoint == prev_utxo.outpoint()).then(|| ()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
+        )?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
+        (input.coin.id == CoinId::btc())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "input coin must be BTC".to_string(),
+            ))?;
+        let (out_rune, out_sats) = self.wish_to_donate(input.coin.value as u64)?;
+        let pool_output = Utxo::try_from(
+            pool_utxo_receive.last().expect("already checked;qed"),
+            Some(out_rune),
+            out_sats,
+        )
+        .map_err(|_| ExchangeError::InvalidTxid)?;
+        let new_k = crate::sqrt(out_rune.value * (out_sats - state.incomes) as u128);
+        let mut new_lp = BTreeMap::new();
+        for (lp, share) in state.lp.iter() {
+            new_lp.insert(
+                lp.clone(),
+                share
+                    .checked_mul(new_k)
+                    .and_then(|mul| mul.checked_div(state.k))
+                    .ok_or(ExchangeError::Overflow)?,
+            );
+        }
+        let k_adjust = new_lp.values().sum();
+        state.id = Some(txid);
+        state.nonce += 1;
+        state.k = k_adjust;
+        state.lp = new_lp;
+        state.utxo = Some(pool_output);
+        Ok((state, prev_utxo))
+    }
+
     /// (x - ∆x)(y + ∆y) = xy
     /// => ∆x = x - xy / (y + ∆y)
     ///    p = ∆y / ∆x
@@ -621,6 +719,7 @@ impl LiquidityPool {
             (rune_remains >= self.meta.min_amount)
                 .then(|| ())
                 .ok_or(ExchangeError::EmptyPool)?;
+
             let offer = rune_supply - rune_remains;
             Ok((
                 CoinBalance {
