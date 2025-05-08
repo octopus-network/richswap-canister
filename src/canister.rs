@@ -1,5 +1,5 @@
 use crate::{
-    pool::{self, CoinMeta},
+    pool::{self, CoinMeta, PoolState},
     ExchangeError,
 };
 use candid::{CandidType, Deserialize, Principal};
@@ -7,6 +7,7 @@ use ic_canister_log::log;
 use ic_cdk::{api::management_canister::bitcoin::BitcoinNetwork, post_upgrade};
 use ic_cdk_macros::{query, update};
 use ic_log::*;
+use ree_types::Txid;
 use ree_types::{
     bitcoin::psbt::Psbt, exchange_interfaces::*, CoinBalance, CoinId, Intention, Pubkey, TxRecord,
     Utxo,
@@ -34,17 +35,40 @@ pub fn get_fee_collector() -> Pubkey {
     crate::get_fee_collector()
 }
 
-use ree_types::Txid;
+#[update(guard = "ensure_guardian")]
+pub fn pause() {
+    crate::PAUSED.with_borrow_mut(|p| {
+        let _ = p.set(true);
+    });
+}
+
+#[update(guard = "ensure_guardian")]
+pub fn recover() {
+    crate::PAUSED.with_borrow_mut(|p| {
+        let _ = p.set(false);
+    });
+}
 
 #[query]
-pub fn get_utxo_chain(addr: String) -> Vec<Option<Txid>> {
+pub fn get_pool_state_chain(
+    addr: String,
+    txid: Txid,
+) -> Result<Option<(Option<PoolState>, PoolState)>, String> {
     crate::with_pool(&addr, |pool| {
-        pool.as_ref()
-            .unwrap()
-            .states
-            .iter()
-            .map(|s| s.id)
-            .collect::<Vec<_>>()
+        let pool = pool
+            .as_ref()
+            .ok_or(ExchangeError::InvalidPool.to_string())?;
+        for (i, state) in pool.states.iter().enumerate() {
+            if state.id == Some(txid) {
+                let prev_state = if i > 0 {
+                    Some(pool.states[i - 1].clone())
+                } else {
+                    None
+                };
+                return Ok(Some((prev_state, state.clone())));
+            }
+        }
+        Ok(None)
     })
 }
 
@@ -65,6 +89,7 @@ pub fn get_tx_affected(txid: Txid) -> Option<TxRecord> {
 
 #[update]
 pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
+    crate::ensure_online()?;
     match crate::with_pool_name(&rune_id) {
         Some(addr) => crate::with_pool(&addr, |pool| {
             pool.as_ref()
@@ -110,6 +135,7 @@ pub struct UtxoToBeMerge {
 
 #[update]
 pub async fn pre_sync_with_btc(addr: String) -> Result<UtxoToBeMerge, ExchangeError> {
+    crate::ensure_online()?;
     let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
     let utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
     let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
@@ -132,6 +158,7 @@ pub struct DonateIntention {
 
 #[query]
 pub async fn pre_donate(pool: String, input_sats: u64) -> Result<DonateIntention, ExchangeError> {
+    crate::ensure_online()?;
     let pool = crate::with_pool(&pool, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
     let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
     let (out_rune, out_sats) = pool.wish_to_donate(input_sats)?;
@@ -152,6 +179,7 @@ pub struct ExtractFeeOffer {
 
 #[query]
 pub fn pre_extract_fee(addr: String) -> Result<ExtractFeeOffer, ExchangeError> {
+    crate::ensure_online()?;
     crate::with_pool(&addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         let value = pool.available_to_extract()?;
@@ -259,6 +287,7 @@ pub fn pre_withdraw_liquidity(
     user_addr: String,
     share: u128,
 ) -> Result<WithdrawalOffer, ExchangeError> {
+    crate::ensure_online()?;
     crate::with_pool(&pool_addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         let (btc, rune_output, _) = pool.available_to_withdraw(&user_addr, share)?;
@@ -289,6 +318,7 @@ pub fn pre_add_liquidity(
     pool_addr: String,
     side: CoinBalance,
 ) -> Result<LiquidityOffer, ExchangeError> {
+    crate::ensure_online()?;
     crate::with_pool(&pool_addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         let another = pool.liquidity_should_add(side)?;
@@ -310,6 +340,7 @@ pub struct SwapOffer {
 
 #[query]
 pub fn pre_swap(id: String, input: CoinBalance) -> Result<SwapOffer, ExchangeError> {
+    crate::ensure_online()?;
     crate::with_pool(&id, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         let recent_state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
@@ -501,6 +532,7 @@ pub fn new_block(args: NewBlockArgs) -> NewBlockResponse {
 /// REE API
 #[update(guard = "ensure_orchestrator")]
 pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
+    crate::ensure_online().map_err(|e| e.to_string())?;
     let ExecuteTxArgs {
         psbt_hex,
         txid,
@@ -747,6 +779,12 @@ fn ensure_owner() -> Result<(), String> {
 
 fn ensure_orchestrator() -> Result<(), String> {
     crate::is_orchestrator(&ic_cdk::caller())
+        .then(|| ())
+        .ok_or("Access denied".to_string())
+}
+
+fn ensure_guardian() -> Result<(), String> {
+    crate::is_guardian(&ic_cdk::caller())
         .then(|| ())
         .ok_or("Access denied".to_string())
 }

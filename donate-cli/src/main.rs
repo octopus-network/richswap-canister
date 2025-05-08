@@ -95,7 +95,7 @@ enum CanisterResult {
 // Error handling
 #[allow(dead_code)]
 #[derive(thiserror::Error, Debug)]
-enum WindsurfError {
+enum CliError {
     #[error("Invalid network: {0}")]
     InvalidNetwork(String),
 
@@ -150,7 +150,7 @@ async fn async_main(args: Args) -> Result<()> {
             orchestrator: Principal::from_text(MAINNET_ORCHESTRATOR_CANISTER_ID).unwrap(),
             swap: Principal::from_text(MAINNET_SWAP_CANISTER_ID).unwrap(),
         }),
-        _ => Err(anyhow!(WindsurfError::InvalidNetwork(args.network))),
+        _ => Err(anyhow!(CliError::InvalidNetwork(args.network))),
     };
     let config = config.unwrap();
 
@@ -160,7 +160,7 @@ async fn async_main(args: Args) -> Result<()> {
 
     // Make sure the private key network matches the command line network
     if private_key.network != config.network.into() {
-        return Err(anyhow!(WindsurfError::InvalidNetwork(format!(
+        return Err(anyhow!(CliError::InvalidNetwork(format!(
             "Private key network ({:?}) doesn't match specified network ({:?})",
             private_key.network, config.network
         ))));
@@ -198,7 +198,7 @@ async fn async_main(args: Args) -> Result<()> {
 
     if fee_utxos.is_empty() {
         error!("No UTXOs found for fee payment. Please ensure the address {} has funds on the network.", input_address);
-        return Err(anyhow!(WindsurfError::NoFeeUtxos));
+        return Err(anyhow!(CliError::NoFeeUtxos));
     }
 
     // Prompt user to select which UTXO to use for fee payment
@@ -223,14 +223,14 @@ async fn async_main(args: Args) -> Result<()> {
     let fee_idx = match input.trim().parse::<usize>() {
         Ok(idx) if idx < fee_utxos.len() => idx,
         Ok(idx) => {
-            return Err(anyhow!(WindsurfError::PsbtError(format!(
+            return Err(anyhow!(CliError::PsbtError(format!(
                 "Invalid UTXO index: {}. Must be between 0 and {}",
                 idx,
                 fee_utxos.len() - 1
             ))));
         }
         Err(e) => {
-            return Err(anyhow!(WindsurfError::PsbtError(format!(
+            return Err(anyhow!(CliError::PsbtError(format!(
                 "Failed to parse UTXO index: {}",
                 e
             ))));
@@ -240,7 +240,7 @@ async fn async_main(args: Args) -> Result<()> {
     let fee_input = fee_utxos[fee_idx].clone();
     if fee_input.sats < 12546 {
         error!("Fee input is too small. Please select a larger UTXO.");
-        return Err(anyhow!(WindsurfError::FeeTooSmall));
+        return Err(anyhow!(CliError::FeeTooSmall));
     }
 
     println!(
@@ -295,7 +295,7 @@ async fn async_main(args: Args) -> Result<()> {
         .sats
         .checked_sub(estimated_fee)
         .and_then(|r| r.checked_sub(10000u64))
-        .ok_or_else(|| anyhow!(WindsurfError::FeeTooSmall))?;
+        .ok_or_else(|| anyhow!(CliError::FeeTooSmall))?;
 
     // Rebuild PSBT with correct change amount
     let mut psbt = make_psbt_from_utxos(
@@ -460,24 +460,24 @@ async fn fetch_utxos_from_btc_rpc(address: &str, rpc_url: &str) -> Result<Vec<Ut
         .json(&request)
         .send()
         .await
-        .map_err(|e| anyhow!(WindsurfError::BitcoinRpcError(e.to_string())))?;
+        .map_err(|e| anyhow!(CliError::BitcoinRpcError(e.to_string())))?;
 
     let response = response
         .json::<RpcResponse>()
         .await
-        .map_err(|e| anyhow!(WindsurfError::BitcoinRpcError(e.to_string())))?;
+        .map_err(|e| anyhow!(CliError::BitcoinRpcError(e.to_string())))?;
     let scan_result = response.result.ok_or_else(|| {
-        anyhow!(WindsurfError::BitcoinRpcError(
+        anyhow!(CliError::BitcoinRpcError(
             "No result in response".to_string()
         ))
     })?;
     if !scan_result.success {
-        return Err(anyhow!(WindsurfError::BitcoinRpcError(
+        return Err(anyhow!(CliError::BitcoinRpcError(
             "Scan failed".to_string()
         )));
     }
     if scan_result.unspents.is_empty() {
-        return Err(anyhow!(WindsurfError::BitcoinRpcError(
+        return Err(anyhow!(CliError::BitcoinRpcError(
             "No UTXOs found".to_string()
         )));
     }
@@ -514,13 +514,13 @@ fn make_psbt_from_utxos(
     for utxo in utxos {
         // Create outpoint from txid and vout
         let txid_bytes = hex::decode(&utxo.txid)
-            .map_err(|e| anyhow!(WindsurfError::PsbtError(format!("Invalid txid hex: {}", e))))?;
+            .map_err(|e| anyhow!(CliError::PsbtError(format!("Invalid txid hex: {}", e))))?;
 
         let mut txid = [0u8; 32];
         if txid_bytes.len() == 32 {
             txid.copy_from_slice(&txid_bytes);
         } else {
-            return Err(anyhow!(WindsurfError::PsbtError(format!(
+            return Err(anyhow!(CliError::PsbtError(format!(
                 "Invalid txid length: {}",
                 txid_bytes.len()
             ))));
@@ -529,12 +529,8 @@ fn make_psbt_from_utxos(
         // Create outpoint (reversed because Bitcoin uses little-endian for txids)
         txid.reverse();
         // Convert [u8; 32] to Txid by creating a sha256d::Hash first
-        let txid_hash = sha256d::Hash::from_slice(&txid).map_err(|e| {
-            anyhow!(WindsurfError::PsbtError(format!(
-                "Invalid txid hash: {}",
-                e
-            )))
-        })?;
+        let txid_hash = sha256d::Hash::from_slice(&txid)
+            .map_err(|e| anyhow!(CliError::PsbtError(format!("Invalid txid hash: {}", e))))?;
         let txid = Txid::from_raw_hash(txid_hash);
         let outpoint = OutPoint::new(txid, utxo.vout);
 
@@ -584,12 +580,8 @@ fn make_psbt_from_utxos(
     };
 
     // Create a PSBT from the unsigned transaction
-    let mut psbt = Psbt::from_unsigned_tx(tx).map_err(|e| {
-        anyhow!(WindsurfError::PsbtError(format!(
-            "Failed to create PSBT: {}",
-            e
-        )))
-    })?;
+    let mut psbt = Psbt::from_unsigned_tx(tx)
+        .map_err(|e| anyhow!(CliError::PsbtError(format!("Failed to create PSBT: {}", e))))?;
 
     // Add witness UTXOs for each input
     for (idx, utxo) in utxos.iter().enumerate() {
@@ -721,7 +713,7 @@ async fn submit_psbt_to_orchestrator(
         .with_identity(AnonymousIdentity)
         .build()
         .map_err(|e| {
-            anyhow!(WindsurfError::CanisterError(format!(
+            anyhow!(CliError::CanisterError(format!(
                 "Failed to create agent: {}",
                 e
             )))
@@ -799,7 +791,7 @@ async fn submit_psbt_to_orchestrator(
 
     // Encode the invoke_args
     let args = Encode!(&invoke_args).map_err(|e| {
-        anyhow!(WindsurfError::CanisterError(format!(
+        anyhow!(CliError::CanisterError(format!(
             "Failed to encode arguments: {}",
             e
         )))
@@ -812,7 +804,7 @@ async fn submit_psbt_to_orchestrator(
         .call_and_wait()
         .await
         .map_err(|e| {
-            anyhow!(WindsurfError::CanisterError(format!(
+            anyhow!(CliError::CanisterError(format!(
                 "Failed to call invoke: {}",
                 e
             )))
@@ -821,7 +813,7 @@ async fn submit_psbt_to_orchestrator(
     // Decode response (Result variant)
     let result: Result<String, String> =
         Decode!(&response_bytes, Result<String, String>).map_err(|e| {
-            anyhow!(WindsurfError::CanisterError(format!(
+            anyhow!(CliError::CanisterError(format!(
                 "Failed to decode response: {}",
                 e
             )))
@@ -830,7 +822,7 @@ async fn submit_psbt_to_orchestrator(
     // Check if it's Ok or Err variant
     match result {
         Ok(txid) => Ok(txid),
-        Err(e) => Err(anyhow!(WindsurfError::CanisterError(e))),
+        Err(e) => Err(anyhow!(CliError::CanisterError(e))),
     }
 }
 
