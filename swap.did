@@ -10,6 +10,7 @@ type ExchangeError = variant {
   InvalidSignPsbtArgs : text;
   UtxoMismatch;
   InvalidNumeric;
+  PriceLimitExceeded;
   Overflow;
   InvalidInput;
   PoolAddressNotFound;
