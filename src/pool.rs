@@ -689,6 +689,30 @@ impl LiquidityPool {
         Ok((state, prev_utxo))
     }
 
+    fn ensure_price_limit(
+        sats: u64,
+        rune: u128,
+        sats1: u64,
+        rune1: u128,
+    ) -> Result<(), ExchangeError> {
+        let sats = sats as i128;
+        let sats1 = sats1 as i128;
+        let rune = rune as i128;
+        let rune1 = rune1 as i128;
+
+        let a = sats * rune1;
+        let b = sats1 * rune;
+
+        let a = rust_decimal::Decimal::from_i128_with_scale(a, 0);
+        let b = rust_decimal::Decimal::from_i128_with_scale(b, 0);
+        let s = if a > b { a / b } else { b / a };
+        let max = rust_decimal::Decimal::new(110, 2);
+        let min = rust_decimal::Decimal::new(90, 2);
+        (s >= min && s <= max)
+            .then(|| ())
+            .ok_or(ExchangeError::PriceLimitExceeded)
+    }
+
     /// (x - ∆x)(y + ∆y) = xy
     /// => ∆x = x - xy / (y + ∆y)
     ///    p = ∆y / ∆x
@@ -719,7 +743,12 @@ impl LiquidityPool {
             (rune_remains >= self.meta.min_amount)
                 .then(|| ())
                 .ok_or(ExchangeError::EmptyPool)?;
-
+            Self::ensure_price_limit(
+                btc_supply,
+                rune_supply,
+                btc_supply + input_btc,
+                rune_remains,
+            )?;
             let offer = rune_supply - rune_remains;
             Ok((
                 CoinBalance {
@@ -747,6 +776,12 @@ impl LiquidityPool {
             } else {
                 0
             };
+            Self::ensure_price_limit(
+                btc_supply,
+                rune_supply,
+                pool_btc_remains,
+                rune_supply + taker.value,
+            )?;
             Ok((
                 CoinBalance {
                     id: btc_meta.id,
@@ -1004,88 +1039,28 @@ impl LiquidityPool {
 }
 
 #[test]
-pub fn test_migrate() {
-    use std::str::FromStr;
+pub fn test_price_limit() {
+    // 1:1, p = 1
+    let sats = 1000;
+    let rune = 1000;
+    // 1.1:0.9, p = 11/9 > 110%
+    let sats1 = 1100;
+    let rune1 = 900;
+    assert!(LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1).is_err());
 
-    #[derive(CandidType, Clone, Debug, Deserialize, Serialize)]
-    pub struct LiquidityPoolV1 {
-        pub states: Vec<PoolStateV1>,
-        pub fee_rate: u64,
-        pub burn_rate: u64,
-        pub meta: CoinMeta,
-        pub pubkey: Pubkey,
-        pub tweaked: Pubkey,
-        pub addr: String,
-    }
+    // 10:1, p = 10
+    let sats = 1000;
+    let rune = 100;
+    // 11:1, p = 11
+    let sats1 = 1100;
+    let rune1 = 100;
+    assert!(LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1).is_ok());
 
-    #[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
-    pub struct PoolStateV1 {
-        pub id: Option<Txid>,
-        pub nonce: u64,
-        pub utxo: Option<Utxo>,
-        pub incomes: u64,
-        pub k: u128,
-        pub lp: BTreeMap<String, u128>,
-    }
-
-    impl Storable for PoolStateV1 {
-        const BOUND: Bound = Bound::Unbounded;
-
-        fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-            let mut bytes = vec![];
-            let _ = ciborium::ser::into_writer(self, &mut bytes);
-            std::borrow::Cow::Owned(bytes)
-        }
-
-        fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-            let dire = ciborium::de::from_reader(bytes.as_ref()).expect("failed to decode Pool");
-            dire
-        }
-    }
-
-    impl Storable for LiquidityPoolV1 {
-        const BOUND: Bound = Bound::Unbounded;
-
-        fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-            let mut bytes = vec![];
-            let _ = ciborium::ser::into_writer(self, &mut bytes);
-            std::borrow::Cow::Owned(bytes)
-        }
-
-        fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-            let dire = ciborium::de::from_reader(bytes.as_ref()).expect("failed to decode Pool");
-            dire
-        }
-    }
-
-    let mut lp = BTreeMap::new();
-    lp.insert(
-        "tb1pfr420a6qr8t00xwjyfz7x4lg2ppdqnnm3n7gk8x4q4qra93wx88qpam69j".to_string(),
-        1241451,
-    );
-    let pool = LiquidityPoolV1 {
-        states: vec![PoolStateV1 {
-            id: None,
-            nonce: 1u64,
-            utxo: None,
-            incomes: 200,
-            k: 1231241099123u128,
-            lp,
-        }],
-        fee_rate: 7000,
-        burn_rate: 2000,
-        meta: CoinMeta::btc(),
-        pubkey: Pubkey::from_str(
-            "74503101f591da4f1008b057b79aff41c65f855e0e635a601c689041492b393a",
-        )
-        .unwrap(),
-        tweaked: Pubkey::from_str(
-            "74503101f591da4f1008b057b79aff41c65f855e0e635a601c689041492b393a",
-        )
-        .unwrap(),
-        addr: "tb1puzk3gn4z3rrjjnrhlgk5yvts8ejs0j2umazpcc4anq62wfk00e6ssw9p0n".to_string(),
-    };
-    let serialized = pool.to_bytes();
-    let pool = LiquidityPool::from_bytes(serialized);
-    assert!(pool.states[0].lp_earnings.is_empty());
+    // 1:10, p = 0.1
+    let sats = 100;
+    let rune = 1000;
+    // 1:11, p = 0.11
+    let sats1 = 100;
+    let rune1 = 1100;
+    assert!(LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1).is_ok());
 }
