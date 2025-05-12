@@ -694,7 +694,7 @@ impl LiquidityPool {
         rune: u128,
         sats1: u64,
         rune1: u128,
-    ) -> Result<(), ExchangeError> {
+    ) -> Result<u32, ExchangeError> {
         let sats = sats as i128;
         let sats1 = sats1 as i128;
         let rune = rune as i128;
@@ -705,12 +705,20 @@ impl LiquidityPool {
 
         let a = rust_decimal::Decimal::from_i128_with_scale(a, 0);
         let b = rust_decimal::Decimal::from_i128_with_scale(b, 0);
-        let s = if a > b { a / b } else { b / a };
+        let s = b / a;
         let max = rust_decimal::Decimal::new(110, 2);
         let min = rust_decimal::Decimal::new(90, 2);
         (s >= min && s <= max)
             .then(|| ())
-            .ok_or(ExchangeError::PriceImpactLimitExceeded)
+            .ok_or(ExchangeError::PriceImpactLimitExceeded)?;
+        let p_delta = (s - rust_decimal::Decimal::ONE) * rust_decimal::Decimal::new(100, 0);
+        Ok(p_delta
+            .abs()
+            .trunc_with_scale(0)
+            .normalize()
+            .mantissa()
+            .try_into()
+            .unwrap_or(0) as u32)
     }
 
     /// (x - ∆x)(y + ∆y) = xy
@@ -719,7 +727,7 @@ impl LiquidityPool {
     pub(crate) fn available_to_swap(
         &self,
         taker: CoinBalance,
-    ) -> Result<(CoinBalance, u64, u64), ExchangeError> {
+    ) -> Result<(CoinBalance, u64, u64, u32), ExchangeError> {
         let btc_meta = CoinMeta::btc();
         (taker.id == self.meta.id || taker.id == CoinId::btc())
             .then(|| ())
@@ -743,7 +751,7 @@ impl LiquidityPool {
             (rune_remains >= self.meta.min_amount)
                 .then(|| ())
                 .ok_or(ExchangeError::EmptyPool)?;
-            Self::ensure_price_limit(
+            let price_impact = Self::ensure_price_limit(
                 btc_supply,
                 rune_supply,
                 btc_supply + input_btc,
@@ -757,6 +765,7 @@ impl LiquidityPool {
                 },
                 fee,
                 burn,
+                price_impact,
             ))
         } else {
             // rune -> btc
@@ -776,7 +785,7 @@ impl LiquidityPool {
             } else {
                 0
             };
-            Self::ensure_price_limit(
+            let price_impact = Self::ensure_price_limit(
                 btc_supply,
                 rune_supply,
                 pool_btc_remains,
@@ -789,6 +798,7 @@ impl LiquidityPool {
                 },
                 fee + round_to_keep,
                 burn,
+                price_impact,
             ))
         }
     }
@@ -830,7 +840,7 @@ impl LiquidityPool {
             ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
         )?;
         // check minimal sats
-        let (offer, fee, burn) = self.available_to_swap(input.coin)?;
+        let (offer, fee, burn, _) = self.available_to_swap(input.coin)?;
         let (btc_output, rune_output) = if input.coin.id == CoinId::btc() {
             let input_btc: u64 = input
                 .coin
@@ -1054,13 +1064,19 @@ pub fn test_price_limit() {
     // 11:1, p = 11
     let sats1 = 1100;
     let rune1 = 100;
-    assert!(LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1).is_ok());
+    // delta = (11 - 10)/10 = 10%
+    let delta = LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1);
+    assert!(delta.is_ok());
+    assert_eq!(delta.unwrap(), 10);
 
-    // 1:10, p = 0.1
+    // 1:10, p = 1/10 = 0.1
     let sats = 100;
     let rune = 1000;
-    // 1:11, p = 0.11
+    // 1:11, p = 1/11 = 0.09090909
     let sats1 = 100;
     let rune1 = 1100;
-    assert!(LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1).is_ok());
+    // delta = 9%
+    let delta = LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1);
+    assert!(delta.is_ok());
+    assert_eq!(delta.unwrap(), 9);
 }

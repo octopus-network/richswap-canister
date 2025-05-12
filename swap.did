@@ -124,7 +124,12 @@ type Result_7 = variant { Ok : LiquidityOffer; Err : ExchangeError };
 type Result_8 = variant { Ok : DonateIntention; Err : ExchangeError };
 type Result_9 = variant { Ok : ExtractFeeOffer; Err : ExchangeError };
 type RollbackTxArgs = record { txid : text };
-type SwapOffer = record { output : CoinBalance; nonce : nat64; input : Utxo };
+type SwapOffer = record {
+  output : CoinBalance;
+  nonce : nat64;
+  price_impact : nat32;
+  input : Utxo;
+};
 type TxRecord = record { pools : vec text };
 type TxRecordInfo = record {
   records : vec text;
