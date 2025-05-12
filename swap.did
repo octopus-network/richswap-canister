@@ -10,10 +10,10 @@ type ExchangeError = variant {
   InvalidSignPsbtArgs : text;
   UtxoMismatch;
   InvalidNumeric;
-  PriceLimitExceeded;
   Overflow;
   InvalidInput;
   PoolAddressNotFound;
+  PriceImpactLimitExceeded;
   RuneIndexerError : text;
   PoolStateExpired : nat64;
   TooSmallFunds;

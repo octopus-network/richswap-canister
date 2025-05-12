@@ -94,8 +94,8 @@ pub enum ExchangeError {
     UtxoMismatch,
     #[error("exchange paused")]
     Puased,
-    #[error("price limited")]
-    PriceLimitExceeded,
+    #[error("price impact limit exceeded")]
+    PriceImpactLimitExceeded,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;

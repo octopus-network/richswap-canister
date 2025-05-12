@@ -710,7 +710,7 @@ impl LiquidityPool {
         let min = rust_decimal::Decimal::new(90, 2);
         (s >= min && s <= max)
             .then(|| ())
-            .ok_or(ExchangeError::PriceLimitExceeded)
+            .ok_or(ExchangeError::PriceImpactLimitExceeded)
     }
 
     /// (x - ∆x)(y + ∆y) = xy
