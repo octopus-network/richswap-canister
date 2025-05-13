@@ -93,7 +93,7 @@ pub enum ExchangeError {
     #[error("bitcoin canister's utxo mismatch")]
     UtxoMismatch,
     #[error("exchange paused")]
-    Puased,
+    Paused,
     #[error("price impact limit exceeded")]
     PriceImpactLimitExceeded,
 }
@@ -307,7 +307,7 @@ pub(crate) fn ensure_online() -> Result<(), ExchangeError> {
     PAUSED
         .with(|p| !*p.borrow().get())
         .then(|| ())
-        .ok_or(ExchangeError::Puased)
+        .ok_or(ExchangeError::Paused)
 }
 
 pub(crate) fn get_fee_collector() -> Pubkey {
@@ -325,7 +325,8 @@ pub(crate) fn is_orchestrator(principal: &Principal) -> bool {
 pub(crate) fn is_guardian(principal: &Principal) -> bool {
     cfg_if::cfg_if! {
         if #[cfg(feature = "testnet")] {
-            principal == &Principal::from_text(TESTNET_GUARDIAN_PRINCIPAL).unwrap()
+            principal == &Principal::from_text(TESTNET_GUARDIAN_PRINCIPAL).unwrap() ||
+                principal == &Principal::from_text("kcbkg-xe6mr-ahw5e-vtnl5-jzrlt-peuis-j4fuh-64oqd-a36ns-vh4z3-xae").unwrap()
         } else {
             principal == &Principal::from_text(GUARDIAN_PRINCIPAL).unwrap()
         }

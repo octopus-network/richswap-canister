@@ -11,6 +11,7 @@ type ExchangeError = variant {
   UtxoMismatch;
   InvalidNumeric;
   Overflow;
+  Paused;
   InvalidInput;
   PoolAddressNotFound;
   PriceImpactLimitExceeded;
@@ -22,7 +23,6 @@ type ExchangeError = variant {
   InvalidPsbt : text;
   PoolAlreadyExists;
   InvalidTxid;
-  Puased;
   InvalidLiquidity;
   EmptyPool;
   FetchBitcoinCanisterError;

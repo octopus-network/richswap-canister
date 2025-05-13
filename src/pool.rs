@@ -46,10 +46,10 @@ pub struct LiquidityPool {
 impl LiquidityPool {
     pub fn attrs(&self) -> String {
         let attr = serde_json::json!({
-            "fee_rate": self.fee_rate,
-            "burn_rate": self.burn_rate,
+            "lp_fee_rate": self.fee_rate,
+            "protocol_fee_rate": self.burn_rate,
             "tweaked": self.tweaked.to_string(),
-            "incomes": self.states.last().map(|state| state.incomes).unwrap_or_default(),
+            "protocol_revenue": self.states.last().map(|state| state.incomes).unwrap_or_default(),
             "sqrt_k": self.states.last().map(|state| state.k).unwrap_or_default(),
         });
         serde_json::to_string(&attr).expect("failed to serialize")
@@ -711,7 +711,7 @@ impl LiquidityPool {
         (s >= min && s <= max)
             .then(|| ())
             .ok_or(ExchangeError::PriceImpactLimitExceeded)?;
-        let p_delta = (s - rust_decimal::Decimal::ONE) * rust_decimal::Decimal::new(100, 0);
+        let p_delta = (s - rust_decimal::Decimal::ONE) * rust_decimal::Decimal::new(10000, 0);
         Ok(p_delta
             .abs()
             .trunc_with_scale(0)
@@ -1067,7 +1067,7 @@ pub fn test_price_limit() {
     // delta = (11 - 10)/10 = 10%
     let delta = LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1);
     assert!(delta.is_ok());
-    assert_eq!(delta.unwrap(), 10);
+    assert_eq!(delta.unwrap(), 1000);
 
     // 1:10, p = 1/10 = 0.1
     let sats = 100;
@@ -1078,5 +1078,5 @@ pub fn test_price_limit() {
     // delta = 9%
     let delta = LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1);
     assert!(delta.is_ok());
-    assert_eq!(delta.unwrap(), 9);
+    assert_eq!(delta.unwrap(), 909);
 }
