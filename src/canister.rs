@@ -9,8 +9,7 @@ use ic_cdk_macros::{query, update};
 use ic_log::*;
 use ree_types::Txid;
 use ree_types::{
-    bitcoin::psbt::Psbt, exchange_interfaces::*, CoinBalance, CoinId, Intention, Pubkey, TxRecord,
-    Utxo,
+    bitcoin::psbt::Psbt, exchange_interfaces::*, CoinBalance, CoinId, Intention, TxRecord, Utxo,
 };
 use rune_indexer::{RuneEntry, Service as RuneIndexer};
 use serde::Serialize;
@@ -21,8 +20,8 @@ use std::str::FromStr;
 pub fn upgrade() {}
 
 #[update(guard = "ensure_owner")]
-pub fn set_fee_collector(pubkey: Pubkey) {
-    crate::set_fee_collector(pubkey);
+pub fn set_fee_collector(addr: String) {
+    crate::set_fee_collector(addr);
 }
 
 #[update(guard = "ensure_owner")]
@@ -31,7 +30,7 @@ pub fn set_orchestrator(principal: Principal) {
 }
 
 #[query]
-pub fn get_fee_collector() -> Pubkey {
+pub fn get_fee_collector() -> String {
     crate::get_fee_collector()
 }
 

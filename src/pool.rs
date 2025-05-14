@@ -372,7 +372,7 @@ impl LiquidityPool {
                 "invalid input/output coins, extract fee requires 0 input and 1 output".to_string(),
             ))?;
         let output = output_coins.first().clone().expect("checked;qed");
-        let fee_collector = crate::p2tr_untweaked(&crate::get_fee_collector());
+        let fee_collector = crate::get_fee_collector();
         (output.coin.id == CoinMeta::btc().id && output.to == fee_collector)
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(format!(
@@ -918,6 +918,7 @@ impl LiquidityPool {
     /// outputs:
     ///   0: pool
     ///   1: changes
+    #[allow(unused)]
     pub(crate) fn validate_merge_utxos(
         &self,
         psbt: &Psbt,
