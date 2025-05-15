@@ -46,9 +46,9 @@ pub struct LiquidityPool {
 impl LiquidityPool {
     pub fn attrs(&self) -> String {
         let attr = serde_json::json!({
+            "tweaked_key": self.tweaked.to_string(),
             "lp_fee_rate": self.fee_rate,
             "protocol_fee_rate": self.burn_rate,
-            "tweaked": self.tweaked.to_string(),
             "protocol_revenue": self.states.last().map(|state| state.incomes).unwrap_or_default(),
             "sqrt_k": self.states.last().map(|state| state.k).unwrap_or_default(),
         });
