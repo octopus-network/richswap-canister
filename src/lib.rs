@@ -32,7 +32,11 @@ pub const BTC_CANISTER: &'static str = "ghsi2-tqaaa-aaaan-aaaca-cai";
 pub const TESTNET_BTC_CANISTER: &'static str = "g4xu7-jiaaa-aaaan-aaaaq-cai";
 pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
-    "269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9";
+    "bc1pccdfsdaqk23eszu37jsr494hqcvccg2fkkfkpskk6a84xxyawtsqwxy9q0";
+pub const TESTNET_GUARDIAN_PRINCIPAL: &'static str =
+    "65xmn-zk27d-l4li6-t6jbb-w42dk-k37sl-tthdg-uaevy-ucb34-uu66z-6qe";
+pub const GUARDIAN_PRINCIPAL: &'static str =
+    "v5md3-vs7qy-se4kd-gzd2u-mi225-76rva-rt2ci-ibb2p-petro-2y7aj-hae";
 
 #[derive(Eq, PartialEq, Clone, CandidType, Debug, Deserialize, Serialize)]
 pub struct Output {
@@ -88,6 +92,10 @@ pub enum ExchangeError {
     NoConfirmedUtxos,
     #[error("bitcoin canister's utxo mismatch")]
     UtxoMismatch,
+    #[error("exchange paused")]
+    Paused,
+    #[error("price impact limit exceeded")]
+    PriceImpactLimitExceeded,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -105,7 +113,9 @@ const POOLS_MEMORY_ID: MemoryId = MemoryId::new(10);
 
 const BLOCKS_ID: MemoryId = MemoryId::new(8);
 const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
+#[allow(unused)]
 const WHITELIST_ID: MemoryId = MemoryId::new(11);
+const PAUSED_ID: MemoryId = MemoryId::new(12);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -128,8 +138,8 @@ thread_local! {
     static _POOL_ADDR_DEPRECATED: RefCell<StableBTreeMap<String, Pubkey, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(_POOL_ADDR_MEMORY_ID))));
 
-    static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
-        RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), Pubkey::from_str(DEFAULT_FEE_COLLECTOR).expect("invalid pubkey: fee collector"))
+    static FEE_COLLECTOR: RefCell<Cell<String, Memory>> =
+        RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), DEFAULT_FEE_COLLECTOR.to_string())
                      .expect("fail to init a StableCell"));
 
     static ORCHESTRATOR: RefCell<Cell<Principal, Memory>> =
@@ -145,6 +155,8 @@ thread_local! {
     pub(crate) static WHITELIST: RefCell<StableBTreeMap<String, (), Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(WHITELIST_ID))));
 
+    pub(crate) static PAUSED: RefCell<Cell<bool, Memory>> =
+        RefCell::new(Cell::init(with_memory_manager(|m| m.get(PAUSED_ID)), false).expect("fail to init a StableCell"));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -280,6 +292,7 @@ pub(crate) fn create_empty_pool(
     Ok(addr)
 }
 
+#[allow(unused)]
 pub(crate) fn p2tr_untweaked(pubkey: &Pubkey) -> String {
     let untweaked = pubkey.to_x_only_public_key();
     cfg_if::cfg_if! {
@@ -292,16 +305,34 @@ pub(crate) fn p2tr_untweaked(pubkey: &Pubkey) -> String {
     address.to_string()
 }
 
-pub(crate) fn get_fee_collector() -> Pubkey {
+pub(crate) fn ensure_online() -> Result<(), ExchangeError> {
+    PAUSED
+        .with(|p| !*p.borrow().get())
+        .then(|| ())
+        .ok_or(ExchangeError::Paused)
+}
+
+pub(crate) fn get_fee_collector() -> String {
     FEE_COLLECTOR.with(|f| f.borrow().get().clone())
 }
 
-pub(crate) fn set_fee_collector(pubkey: Pubkey) {
-    let _ = FEE_COLLECTOR.with(|f| f.borrow_mut().set(pubkey));
+pub(crate) fn set_fee_collector(addr: String) {
+    let _ = FEE_COLLECTOR.with(|f| f.borrow_mut().set(addr));
 }
 
 pub(crate) fn is_orchestrator(principal: &Principal) -> bool {
     ORCHESTRATOR.with(|o| o.borrow().get() == principal)
+}
+
+pub(crate) fn is_guardian(principal: &Principal) -> bool {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            principal == &Principal::from_text(TESTNET_GUARDIAN_PRINCIPAL).unwrap() ||
+                principal == &Principal::from_text("kcbkg-xe6mr-ahw5e-vtnl5-jzrlt-peuis-j4fuh-64oqd-a36ns-vh4z3-xae").unwrap()
+        } else {
+            principal == &Principal::from_text(GUARDIAN_PRINCIPAL).unwrap()
+        }
+    }
 }
 
 pub(crate) fn set_orchestrator(principal: Principal) {
