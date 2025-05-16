@@ -8,6 +8,7 @@ type DonateIntention = record {
 };
 type ExchangeError = variant {
   InvalidSignPsbtArgs : text;
+  FundsLimitExceeded;
   UtxoMismatch;
   InvalidNumeric;
   Overflow;

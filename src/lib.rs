@@ -96,6 +96,8 @@ pub enum ExchangeError {
     Paused,
     #[error("price impact limit exceeded")]
     PriceImpactLimitExceeded,
+    #[error("Funds limit exceeded")]
+    FundsLimitExceeded,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;

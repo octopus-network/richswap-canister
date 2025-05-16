@@ -14,6 +14,8 @@ pub const DEFAULT_FEE_RATE: u64 = 7000;
 pub const DEFAULT_BURN_RATE: u64 = 2000;
 /// each tx's satoshis should be >= 10000
 pub const MIN_BTC_VALUE: u64 = 10000;
+/// each tx's staoshis should be <= 10000000;
+pub const MAX_BTC_VALUE: u64 = 10_000_000;
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CoinMeta {
@@ -458,7 +460,9 @@ impl LiquidityPool {
             .checked_mul(btc_supply as u128)
             .and_then(|m| m.checked_div(recent_state.k))
             .ok_or(ExchangeError::EmptyPool)?;
-
+        (btc_delta <= MAX_BTC_VALUE as u128)
+            .then(|| ())
+            .ok_or(ExchangeError::FundsLimitExceeded)?;
         let btc_remains = recent_state
             .satoshis()
             .checked_sub(btc_delta.try_into().map_err(|_| ExchangeError::Overflow)?)
@@ -706,8 +710,8 @@ impl LiquidityPool {
         let a = rust_decimal::Decimal::from_i128_with_scale(a, 0);
         let b = rust_decimal::Decimal::from_i128_with_scale(b, 0);
         let s = b / a;
-        let max = rust_decimal::Decimal::new(110, 2);
-        let min = rust_decimal::Decimal::new(90, 2);
+        let max = rust_decimal::Decimal::new(200, 2);
+        let min = rust_decimal::Decimal::new(50, 2);
         (s >= min && s <= max)
             .then(|| ())
             .ok_or(ExchangeError::PriceImpactLimitExceeded)?;
@@ -742,6 +746,9 @@ impl LiquidityPool {
         if taker.id == CoinId::btc() {
             // btc -> rune
             let input_btc: u64 = taker.value.try_into().expect("BTC amount overflow");
+            (input_btc <= MAX_BTC_VALUE as u64)
+                .then(|| ())
+                .ok_or(ExchangeError::FundsLimitExceeded)?;
             let (input_amount, fee, burn) =
                 Self::charge_fee(input_btc, self.fee_rate, self.burn_rate);
             let rune_remains = btc_supply
@@ -785,6 +792,10 @@ impl LiquidityPool {
             } else {
                 0
             };
+            let out_sats = offer - round_to_keep;
+            (out_sats <= MAX_BTC_VALUE as u64)
+                .then(|| ())
+                .ok_or(ExchangeError::FundsLimitExceeded)?;
             let price_impact = Self::ensure_price_limit(
                 btc_supply,
                 rune_supply,
@@ -794,7 +805,7 @@ impl LiquidityPool {
             Ok((
                 CoinBalance {
                     id: btc_meta.id,
-                    value: (offer - round_to_keep) as u128,
+                    value: out_sats as u128,
                 },
                 fee + round_to_keep,
                 burn,
