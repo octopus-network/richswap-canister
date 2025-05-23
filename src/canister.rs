@@ -654,6 +654,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         "donate" => {
             let (new_state, consumed) = pool
                 .validate_donate(
+                    &psbt,
                     txid,
                     nonce,
                     pool_utxo_spend,

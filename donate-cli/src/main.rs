@@ -556,15 +556,15 @@ fn make_psbt_from_utxos(
     outputs.push(pool_txout);
 
     // Output 1: OP_RETURN for RUNE data (if present)
-    if let Ok(op_return_script) = encode_rune_op_return(&out_rune) {
-        let op_return_txout = TxOut {
-            value: Amount::ZERO,
-            script_pubkey: op_return_script,
-        };
-        outputs.push(op_return_txout);
-    }
+    // if let Ok(op_return_script) = encode_rune_op_return(&out_rune) {
+    //     let op_return_txout = TxOut {
+    //         value: Amount::ZERO,
+    //         script_pubkey: op_return_script,
+    //     };
+    //     outputs.push(op_return_txout);
+    // }
 
-    // Output 2: Change output (back to input address)
+    // Output 1: Change output (back to input address)
     let change_txout = TxOut {
         value: Amount::from_sat(change_amount),
         script_pubkey: input_script.clone(),

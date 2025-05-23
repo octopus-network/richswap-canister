@@ -49,8 +49,10 @@ impl LiquidityPool {
     pub fn attrs(&self) -> String {
         let attr = serde_json::json!({
             "tweaked_key": self.tweaked.to_string(),
+            "key_derive_path": vec![self.base_id().to_bytes()],
             "lp_fee_rate": self.fee_rate,
             "protocol_fee_rate": self.burn_rate,
+            "lp_revenue": self.states.last().map(|state| state.lp_earnings.values().map(|v| *v).sum::<u64>()).unwrap_or_default(),
             "protocol_revenue": self.states.last().map(|state| state.incomes).unwrap_or_default(),
             "sqrt_k": self.states.last().map(|state| state.k).unwrap_or_default(),
         });
@@ -249,6 +251,11 @@ impl LiquidityPool {
                 "invalid input/output_coins, add_liquidity requires 2 inputs and 0 output"
                     .to_string(),
             ))?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
         let x = input_coins[0].coin.clone();
         let y = input_coins[1].coin.clone();
         let mut state = self.states.last().cloned().unwrap_or_default();
@@ -372,6 +379,11 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "invalid input/output coins, extract fee requires 0 input and 1 output".to_string(),
+            ))?;
+        (pool_utxo_receive.len() == 1 || pool_utxo_receive.is_empty())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
             ))?;
         let output = output_coins.first().clone().expect("checked;qed");
         let fee_collector = crate::get_fee_collector();
@@ -499,6 +511,11 @@ impl LiquidityPool {
                 "invalid input/output_coins, withdraw_liquidity requires 0 input and 2 outputs"
                     .to_string(),
             ))?;
+        (pool_utxo_receive.len() == 1 || pool_utxo_receive.is_empty())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
         let x = output_coins[0].coin.clone();
         let y = output_coins[1].coin.clone();
         let (btc_output, rune_output) = if x.id == CoinId::btc() && y.id != CoinId::btc() {
@@ -510,6 +527,7 @@ impl LiquidityPool {
                 "Invalid outputs: requires 2 different output coins".to_string(),
             ))
         }?;
+
         let pool_prev_outpoint =
             pool_utxo_spend
                 .last()
@@ -623,6 +641,7 @@ impl LiquidityPool {
 
     pub(crate) fn validate_donate(
         &self,
+        psbt: &Psbt,
         txid: Txid,
         nonce: u64,
         pool_utxo_spend: Vec<String>,
@@ -634,6 +653,11 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "invalid input/output coins, swap requires 1 input and 0 output".to_string(),
+            ))?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
             ))?;
         let input = input_coins.first().clone().expect("checked;qed");
         let mut state = self
@@ -667,6 +691,32 @@ impl LiquidityPool {
                 "input coin must be BTC".to_string(),
             ))?;
         let (out_rune, out_sats) = self.wish_to_donate(input.coin.value as u64)?;
+        let maybe_pool_output = &psbt.unsigned_tx.output[0];
+        maybe_pool_output
+            .script_pubkey
+            .is_p2tr()
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt(
+                "pool output must be p2tr".to_string(),
+            ))?;
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "testnet")] {
+                let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Testnet4).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
+            } else {
+                let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Bitcoin).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
+            }
+        }
+        (self.addr == recv_address.to_string())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt(
+                "pool output not found".to_string(),
+            ))?;
+        for output in &psbt.unsigned_tx.output {
+            (!output.script_pubkey.is_op_return()).then(|| ()).ok_or(
+                ExchangeError::InvalidPsbt("Outputs should not contain OP_RETURN".to_string()),
+            )?;
+        }
+
         let pool_output = Utxo::try_from(
             pool_utxo_receive.last().expect("already checked;qed"),
             Some(out_rune),
@@ -827,6 +877,11 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "invalid input/output coins, swap requires 1 input and 1 output".to_string(),
+            ))?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
             ))?;
         let input = input_coins.first().clone().expect("checked;qed");
         let output = output_coins.first().clone().expect("checked;qed");
