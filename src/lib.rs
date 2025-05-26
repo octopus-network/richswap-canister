@@ -500,7 +500,7 @@ pub(crate) async fn fork_at_txid(pool: &String, txid: Txid, fee_rate: u64) -> Re
             let recepient = Address::from_str(DEFAULT_FEE_COLLECTOR).unwrap().require_network(Network::Bitcoin).unwrap();
         }
     }
-    let mut tx = Transaction {
+    let tx = Transaction {
         version: Version::TWO,
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
@@ -514,21 +514,28 @@ pub(crate) async fn fork_at_txid(pool: &String, txid: Txid, fee_rate: u64) -> Re
             script_pubkey: recepient.script_pubkey(),
         }],
     };
-    let fee = tx.vsize() as u64 * fee_rate;
-    (utxo.sats > fee)
-        .then(|| ())
-        .ok_or(ExchangeError::InsufficientFunds.to_string())?;
-    tx.output[0].value = Amount::from_sat(utxo.sats - fee);
     let mut psbt = Psbt::from_unsigned_tx(tx).map_err(|_| "invalid psbt".to_string())?;
     let witness_utxo = TxOut {
         value: Amount::from_sat(utxo.sats),
         script_pubkey: sender.script_pubkey(),
     };
     psbt.inputs[0].witness_utxo = Some(witness_utxo);
+    let fee = psbt.unsigned_tx.vsize() as u64 * fee_rate;
+    (utxo.sats > fee)
+        .then(|| ())
+        .ok_or(ExchangeError::InsufficientFunds.to_string())?;
+    psbt.unsigned_tx.output[0].value = Amount::from_sat(utxo.sats - fee);
     crate::psbt::sign(&mut psbt, &utxo, path.to_bytes()).await?;
     let finalized = psbt
         .extract_tx()
         .map_err(|_| "unable to extract tx from psbt".to_string())?;
+    ic_cdk::println!(
+        "fork_at_txid: txid = {}, fee_rate = {}, vsize = {}, fee = {}",
+        finalized.compute_txid(),
+        fee_rate,
+        finalized.vsize(),
+        fee
+    );
     send_transaction(&finalized).await?;
     Ok(Txid::from_str(&finalized.compute_txid().to_string()).expect("txid should be valid"))
 }
