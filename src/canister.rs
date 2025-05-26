@@ -750,6 +750,11 @@ pub fn query_blocks() -> Result<Vec<BlockInfo>, String> {
     Ok(res)
 }
 
+#[update(guard = "ensure_guardian")]
+pub async fn evade(pool: String, txid: Txid, fee_rate: u64) -> Result<Txid, String> {
+    crate::fork_at_txid(&pool, txid, fee_rate).await
+}
+
 #[query]
 pub fn blocks_tx_records_count() -> Result<(u64, u64), String> {
     let tx_records_count = crate::TX_RECORDS.with_borrow(|t| t.len());

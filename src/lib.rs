@@ -15,7 +15,11 @@ use ic_stable_structures::{
 };
 use ordinals::{Artifact, Edict, Runestone};
 use ree_types::{
-    bitcoin::{key::TapTweak, secp256k1::Secp256k1, Address, Network},
+    bitcoin::{
+        absolute::LockTime, key::TapTweak, secp256k1::Secp256k1, transaction::Version, Address,
+        Amount, Network, OutPoint, Psbt, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
+        Txid as BtcTxid, Witness,
+    },
     exchange_interfaces::*,
     CoinBalance, CoinId, Pubkey, TxRecord, Txid, Utxo,
 };
@@ -33,6 +37,7 @@ pub const TESTNET_BTC_CANISTER: &'static str = "g4xu7-jiaaa-aaaan-aaaaq-cai";
 pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "bc1pccdfsdaqk23eszu37jsr494hqcvccg2fkkfkpskk6a84xxyawtsqwxy9q0";
+pub const DEFAULT_TEST_FEE_COLLECTOR: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
 pub const TESTNET_GUARDIAN_PRINCIPAL: &'static str =
     "65xmn-zk27d-l4li6-t6jbb-w42dk-k37sl-tthdg-uaevy-ucb34-uu66z-6qe";
 pub const GUARDIAN_PRINCIPAL: &'static str =
@@ -468,4 +473,82 @@ pub fn get_edicts_in_tx(tx: &ree_types::bitcoin::Transaction) -> Result<Vec<Edic
         }
     }
     Ok(Vec::new())
+}
+
+pub(crate) async fn fork_at_txid(pool: &String, txid: Txid, fee_rate: u64) -> Result<Txid, String> {
+    let (state, path) = crate::with_pool(pool, |pool| {
+        let pool = pool
+            .as_ref()
+            .ok_or(ExchangeError::InvalidPool.to_string())?;
+        let state = pool
+            .states
+            .iter()
+            .find(|s| s.id == Some(txid))
+            .cloned()
+            .ok_or(ExchangeError::InvalidTxid.to_string())?;
+        Ok::<(crate::pool::PoolState, CoinId), String>((state, pool.base_id()))
+    })?;
+    let txid =
+        BtcTxid::from_str(&txid.to_string()).map_err(|_| ExchangeError::InvalidTxid.to_string())?;
+    let utxo = state.utxo.as_ref().expect("must exist");
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let sender = Address::from_str(pool).unwrap().require_network(Network::Testnet4).unwrap();
+            let recepient = Address::from_str(DEFAULT_TEST_FEE_COLLECTOR).unwrap().require_network(Network::Testnet4).unwrap();
+        } else {
+            let sender = Address::from_str(pool).unwrap().require_network(Network::Bitcoin).unwrap();
+            let recepient = Address::from_str(DEFAULT_FEE_COLLECTOR).unwrap().require_network(Network::Bitcoin).unwrap();
+        }
+    }
+    let mut tx = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::new(txid, utxo.vout),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness: Witness::default(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(utxo.sats),
+            script_pubkey: recepient.script_pubkey(),
+        }],
+    };
+    let fee = tx.vsize() as u64 * fee_rate;
+    (utxo.sats > fee)
+        .then(|| ())
+        .ok_or(ExchangeError::InsufficientFunds.to_string())?;
+    tx.output[0].value = Amount::from_sat(utxo.sats - fee);
+    let mut psbt = Psbt::from_unsigned_tx(tx).map_err(|_| "invalid psbt".to_string())?;
+    let witness_utxo = TxOut {
+        value: Amount::from_sat(utxo.sats),
+        script_pubkey: sender.script_pubkey(),
+    };
+    psbt.inputs[0].witness_utxo = Some(witness_utxo);
+    crate::psbt::sign(&mut psbt, &utxo, path.to_bytes()).await?;
+    let finalized = psbt
+        .extract_tx()
+        .map_err(|_| "unable to extract tx from psbt".to_string())?;
+    send_transaction(&finalized).await?;
+    Ok(Txid::from_str(&finalized.compute_txid().to_string()).expect("txid should be valid"))
+}
+
+pub async fn send_transaction(tx: &Transaction) -> Result<(), String> {
+    let tx_bytes = ree_types::bitcoin::consensus::serialize(&tx);
+    let network = if cfg!(feature = "testnet") {
+        ic_cdk::api::management_canister::bitcoin::BitcoinNetwork::Testnet
+    } else {
+        ic_cdk::api::management_canister::bitcoin::BitcoinNetwork::Mainnet
+    };
+    ic_cdk::api::management_canister::bitcoin::bitcoin_send_transaction(
+        ic_cdk::api::management_canister::bitcoin::SendTransactionRequest {
+            transaction: tx_bytes,
+            network,
+        },
+    )
+    .await
+    .inspect_err(|(code, msg)| {
+        ic_cdk::println!("send_transaction error: code = {:?}, msg = {}", code, msg);
+    })
+    .map_err(|(_, msg)| msg.clone())
 }

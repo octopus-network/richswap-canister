@@ -157,6 +157,7 @@ type WithdrawalOffer = record {
 service : {
   blocks_tx_records_count : () -> (Result) query;
   create : (text) -> (Result_1);
+  evade : (text, text, nat64) -> (Result_2);
   execute_tx : (ExecuteTxArgs) -> (Result_2);
   get_all_lp : (text) -> (Result_3) query;
   get_block : (nat32) -> (opt NewBlockInfo) query;
