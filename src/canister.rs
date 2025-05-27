@@ -751,7 +751,7 @@ pub fn query_blocks() -> Result<Vec<BlockInfo>, String> {
 }
 
 #[update(guard = "ensure_guardian")]
-pub async fn evade(pool: String, txid: Txid, fee_rate: u64) -> Result<Txid, String> {
+pub async fn escape_hatch(pool: String, txid: Txid, fee_rate: u64) -> Result<String, String> {
     crate::fork_at_txid(&pool, txid, fee_rate).await
 }
 

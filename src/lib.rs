@@ -38,6 +38,9 @@ pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "bc1pccdfsdaqk23eszu37jsr494hqcvccg2fkkfkpskk6a84xxyawtsqwxy9q0";
 pub const DEFAULT_TEST_FEE_COLLECTOR: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
+pub const SAFE_HOURSE_ADDRESS: &'static str =
+    "bc1pccdfsdaqk23eszu37jsr494hqcvccg2fkkfkpskk6a84xxyawtsqwxy9q0";
+pub const TESTNET_SAFE_HOURSE_ADDRESS: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
 pub const TESTNET_GUARDIAN_PRINCIPAL: &'static str =
     "65xmn-zk27d-l4li6-t6jbb-w42dk-k37sl-tthdg-uaevy-ucb34-uu66z-6qe";
 pub const GUARDIAN_PRINCIPAL: &'static str =
@@ -475,38 +478,50 @@ pub fn get_edicts_in_tx(tx: &ree_types::bitcoin::Transaction) -> Result<Vec<Edic
     Ok(Vec::new())
 }
 
-pub(crate) async fn fork_at_txid(pool: &String, txid: Txid, fee_rate: u64) -> Result<Txid, String> {
-    let (state, path) = crate::with_pool(pool, |pool| {
-        let pool = pool
-            .as_ref()
-            .ok_or(ExchangeError::InvalidPool.to_string())?;
-        let state = pool
-            .states
-            .iter()
-            .find(|s| s.id == Some(txid))
-            .cloned()
-            .ok_or(ExchangeError::InvalidTxid.to_string())?;
-        Ok::<(crate::pool::PoolState, CoinId), String>((state, pool.base_id()))
+pub(crate) async fn fork_at_txid(
+    pool_addr: &String,
+    txid: Txid,
+    fee_rate: u64,
+) -> Result<String, String> {
+    let pool = crate::with_pool(pool_addr, |p| {
+        p.clone().ok_or(ExchangeError::InvalidPool.to_string())
     })?;
-    let txid =
-        BtcTxid::from_str(&txid.to_string()).map_err(|_| ExchangeError::InvalidTxid.to_string())?;
+    let (i, _) = pool
+        .states
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.utxo.as_ref().map(|u| u.txid) == Some(txid))
+        .ok_or_else(|| "txid not found")?;
+    if i == 0 {
+        return Err("txid is the first state, couldn't fork".to_string());
+    }
+    let state = pool
+        .states
+        .get(i - 1)
+        .cloned()
+        .expect("must have a previous state");
+    if state.utxo.is_none() {
+        return Err("previous state has no utxo".to_string());
+    }
     let utxo = state.utxo.as_ref().expect("must exist");
     cfg_if::cfg_if! {
         if #[cfg(feature = "testnet")] {
-            let sender = Address::from_str(pool).unwrap().require_network(Network::Testnet4).unwrap();
-            let recepient = Address::from_str(DEFAULT_TEST_FEE_COLLECTOR).unwrap().require_network(Network::Testnet4).unwrap();
+            let sender = Address::from_str(pool_addr).unwrap().require_network(Network::Testnet4).unwrap();
+            let recepient = Address::from_str(TESTNET_SAFE_HOURSE_ADDRESS).unwrap().require_network(Network::Testnet4).unwrap();
         } else {
-            let sender = Address::from_str(pool).unwrap().require_network(Network::Bitcoin).unwrap();
-            let recepient = Address::from_str(DEFAULT_FEE_COLLECTOR).unwrap().require_network(Network::Bitcoin).unwrap();
+            let sender = Address::from_str(pool_addr).unwrap().require_network(Network::Bitcoin).unwrap();
+            let recepient = Address::from_str(SAFE_HOURSE_ADDRESS).unwrap().require_network(Network::Bitcoin).unwrap();
         }
     }
+    let txid = BtcTxid::from_str(&utxo.txid.to_string())
+        .map_err(|_| ExchangeError::InvalidTxid.to_string())?;
     let tx = Transaction {
         version: Version::TWO,
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
             previous_output: OutPoint::new(txid, utxo.vout),
             script_sig: ScriptBuf::new(),
-            sequence: Sequence::MAX,
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
             witness: Witness::default(),
         }],
         output: vec![TxOut {
@@ -525,7 +540,8 @@ pub(crate) async fn fork_at_txid(pool: &String, txid: Txid, fee_rate: u64) -> Re
         .then(|| ())
         .ok_or(ExchangeError::InsufficientFunds.to_string())?;
     psbt.unsigned_tx.output[0].value = Amount::from_sat(utxo.sats - fee);
-    crate::psbt::sign(&mut psbt, &utxo, path.to_bytes()).await?;
+    ic_cdk::println!("vsize before signing: {}", psbt.unsigned_tx.vsize());
+    crate::psbt::sign(&mut psbt, &utxo, pool.meta.id.to_bytes()).await?;
     let finalized = psbt
         .extract_tx()
         .map_err(|_| "unable to extract tx from psbt".to_string())?;
@@ -536,8 +552,9 @@ pub(crate) async fn fork_at_txid(pool: &String, txid: Txid, fee_rate: u64) -> Re
         finalized.vsize(),
         fee
     );
-    send_transaction(&finalized).await?;
-    Ok(Txid::from_str(&finalized.compute_txid().to_string()).expect("txid should be valid"))
+    // send_transaction(&finalized).await?;
+    let hex = ree_types::bitcoin::consensus::encode::serialize_hex(&finalized);
+    Ok(hex)
 }
 
 pub async fn send_transaction(tx: &Transaction) -> Result<(), String> {
