@@ -8,11 +8,14 @@ type DonateIntention = record {
 };
 type ExchangeError = variant {
   InvalidSignPsbtArgs : text;
+  FundsLimitExceeded;
   UtxoMismatch;
   InvalidNumeric;
   Overflow;
+  Paused;
   InvalidInput;
   PoolAddressNotFound;
+  PriceImpactLimitExceeded;
   RuneIndexerError : text;
   PoolStateExpired : nat64;
   TooSmallFunds;
@@ -94,22 +97,40 @@ type PoolInfo = record {
   nonce : nat64;
   utxos : vec Utxo;
 };
+type PoolState = record {
+  k : nat;
+  id : opt text;
+  lp : vec record { text; nat };
+  lp_earnings : vec record { text; nat64 };
+  utxo : opt Utxo;
+  incomes : nat64;
+  nonce : nat64;
+};
 type Result = variant { Ok : record { nat64; nat64 }; Err : text };
 type Result_1 = variant { Ok : text; Err : ExchangeError };
-type Result_10 = variant { Ok : UtxoToBeMerge; Err : ExchangeError };
-type Result_11 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
-type Result_12 = variant { Ok : vec BlockInfo; Err : text };
-type Result_13 = variant { Ok : vec TxRecordInfo; Err : text };
+type Result_10 = variant { Ok : SwapOffer; Err : ExchangeError };
+type Result_11 = variant { Ok : UtxoToBeMerge; Err : ExchangeError };
+type Result_12 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
+type Result_13 = variant { Ok : vec BlockInfo; Err : text };
+type Result_14 = variant { Ok : vec TxRecordInfo; Err : text };
 type Result_2 = variant { Ok : text; Err : text };
 type Result_3 = variant { Ok : vec record { text; nat }; Err : ExchangeError };
 type Result_4 = variant { Ok : Liquidity; Err : ExchangeError };
-type Result_5 = variant { Ok; Err : text };
-type Result_6 = variant { Ok : LiquidityOffer; Err : ExchangeError };
-type Result_7 = variant { Ok : DonateIntention; Err : ExchangeError };
-type Result_8 = variant { Ok : ExtractFeeOffer; Err : ExchangeError };
-type Result_9 = variant { Ok : SwapOffer; Err : ExchangeError };
+type Result_5 = variant {
+  Ok : opt record { opt PoolState; PoolState };
+  Err : text;
+};
+type Result_6 = variant { Ok; Err : text };
+type Result_7 = variant { Ok : LiquidityOffer; Err : ExchangeError };
+type Result_8 = variant { Ok : DonateIntention; Err : ExchangeError };
+type Result_9 = variant { Ok : ExtractFeeOffer; Err : ExchangeError };
 type RollbackTxArgs = record { txid : text };
-type SwapOffer = record { output : CoinBalance; nonce : nat64; input : Utxo };
+type SwapOffer = record {
+  output : CoinBalance;
+  nonce : nat64;
+  price_impact : nat32;
+  input : Utxo;
+};
 type TxRecord = record { pools : vec text };
 type TxRecordInfo = record {
   records : vec text;
@@ -136,6 +157,7 @@ type WithdrawalOffer = record {
 service : {
   blocks_tx_records_count : () -> (Result) query;
   create : (text) -> (Result_1);
+  escape_hatch : (text, text, nat64) -> (Result_2);
   execute_tx : (ExecuteTxArgs) -> (Result_2);
   get_all_lp : (text) -> (Result_3) query;
   get_block : (nat32) -> (opt NewBlockInfo) query;
@@ -145,19 +167,21 @@ service : {
   get_minimal_tx_value : (GetMinimalTxValueArgs) -> (nat64) query;
   get_pool_info : (GetPoolInfoArgs) -> (opt PoolInfo) query;
   get_pool_list : () -> (vec PoolBasic) query;
+  get_pool_state_chain : (text, text) -> (Result_5) query;
   get_tx_affected : (text) -> (opt TxRecord) query;
-  get_utxo_chain : (text) -> (vec opt text) query;
   list_pools : (opt text, nat64) -> (vec PoolInfo) query;
-  new_block : (NewBlockInfo) -> (Result_5);
-  pre_add_liquidity : (text, CoinBalance) -> (Result_6) query;
-  pre_donate : (text, nat64) -> (Result_7) query;
-  pre_extract_fee : (text) -> (Result_8) query;
-  pre_swap : (text, CoinBalance) -> (Result_9) query;
-  pre_sync_with_btc : (text) -> (Result_10);
-  pre_withdraw_liquidity : (text, text, nat) -> (Result_11) query;
-  query_blocks : () -> (Result_12) query;
-  query_tx_records : () -> (Result_13) query;
-  rollback_tx : (RollbackTxArgs) -> (Result_5);
+  new_block : (NewBlockInfo) -> (Result_6);
+  pause : () -> ();
+  pre_add_liquidity : (text, CoinBalance) -> (Result_7) query;
+  pre_donate : (text, nat64) -> (Result_8) query;
+  pre_extract_fee : (text) -> (Result_9) query;
+  pre_swap : (text, CoinBalance) -> (Result_10) query;
+  pre_sync_with_btc : (text) -> (Result_11);
+  pre_withdraw_liquidity : (text, text, nat) -> (Result_12) query;
+  query_blocks : () -> (Result_13) query;
+  query_tx_records : () -> (Result_14) query;
+  recover : () -> ();
+  rollback_tx : (RollbackTxArgs) -> (Result_6);
   set_fee_collector : (text) -> ();
   set_orchestrator : (principal) -> ();
 }

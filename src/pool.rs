@@ -14,6 +14,8 @@ pub const DEFAULT_FEE_RATE: u64 = 7000;
 pub const DEFAULT_BURN_RATE: u64 = 2000;
 /// each tx's satoshis should be >= 10000
 pub const MIN_BTC_VALUE: u64 = 10000;
+/// each tx's staoshis should be <= 10000000;
+pub const MAX_BTC_VALUE: u64 = 10_000_000;
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CoinMeta {
@@ -46,10 +48,12 @@ pub struct LiquidityPool {
 impl LiquidityPool {
     pub fn attrs(&self) -> String {
         let attr = serde_json::json!({
-            "fee_rate": self.fee_rate,
-            "burn_rate": self.burn_rate,
-            "tweaked": self.tweaked.to_string(),
-            "incomes": self.states.last().map(|state| state.incomes).unwrap_or_default(),
+            "tweaked_key": self.tweaked.to_string(),
+            "key_derive_path": vec![self.base_id().to_bytes()],
+            "lp_fee_rate": self.fee_rate,
+            "protocol_fee_rate": self.burn_rate,
+            "lp_revenue": self.states.last().map(|state| state.lp_earnings.values().map(|v| *v).sum::<u64>()).unwrap_or_default(),
+            "protocol_revenue": self.states.last().map(|state| state.incomes).unwrap_or_default(),
             "sqrt_k": self.states.last().map(|state| state.k).unwrap_or_default(),
         });
         serde_json::to_string(&attr).expect("failed to serialize")
@@ -247,6 +251,11 @@ impl LiquidityPool {
                 "invalid input/output_coins, add_liquidity requires 2 inputs and 0 output"
                     .to_string(),
             ))?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
         let x = input_coins[0].coin.clone();
         let y = input_coins[1].coin.clone();
         let mut state = self.states.last().cloned().unwrap_or_default();
@@ -371,8 +380,13 @@ impl LiquidityPool {
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "invalid input/output coins, extract fee requires 0 input and 1 output".to_string(),
             ))?;
+        (pool_utxo_receive.len() == 1 || pool_utxo_receive.is_empty())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
         let output = output_coins.first().clone().expect("checked;qed");
-        let fee_collector = crate::p2tr_untweaked(&crate::get_fee_collector());
+        let fee_collector = crate::get_fee_collector();
         (output.coin.id == CoinMeta::btc().id && output.to == fee_collector)
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(format!(
@@ -458,7 +472,9 @@ impl LiquidityPool {
             .checked_mul(btc_supply as u128)
             .and_then(|m| m.checked_div(recent_state.k))
             .ok_or(ExchangeError::EmptyPool)?;
-
+        (btc_delta <= MAX_BTC_VALUE as u128)
+            .then(|| ())
+            .ok_or(ExchangeError::FundsLimitExceeded)?;
         let btc_remains = recent_state
             .satoshis()
             .checked_sub(btc_delta.try_into().map_err(|_| ExchangeError::Overflow)?)
@@ -495,6 +511,11 @@ impl LiquidityPool {
                 "invalid input/output_coins, withdraw_liquidity requires 0 input and 2 outputs"
                     .to_string(),
             ))?;
+        (pool_utxo_receive.len() == 1 || pool_utxo_receive.is_empty())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
         let x = output_coins[0].coin.clone();
         let y = output_coins[1].coin.clone();
         let (btc_output, rune_output) = if x.id == CoinId::btc() && y.id != CoinId::btc() {
@@ -506,6 +527,7 @@ impl LiquidityPool {
                 "Invalid outputs: requires 2 different output coins".to_string(),
             ))
         }?;
+
         let pool_prev_outpoint =
             pool_utxo_spend
                 .last()
@@ -619,6 +641,7 @@ impl LiquidityPool {
 
     pub(crate) fn validate_donate(
         &self,
+        psbt: &Psbt,
         txid: Txid,
         nonce: u64,
         pool_utxo_spend: Vec<String>,
@@ -630,6 +653,11 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "invalid input/output coins, swap requires 1 input and 0 output".to_string(),
+            ))?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
             ))?;
         let input = input_coins.first().clone().expect("checked;qed");
         let mut state = self
@@ -663,6 +691,32 @@ impl LiquidityPool {
                 "input coin must be BTC".to_string(),
             ))?;
         let (out_rune, out_sats) = self.wish_to_donate(input.coin.value as u64)?;
+        let maybe_pool_output = &psbt.unsigned_tx.output[0];
+        maybe_pool_output
+            .script_pubkey
+            .is_p2tr()
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt(
+                "pool output must be p2tr".to_string(),
+            ))?;
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "testnet")] {
+                let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Testnet4).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
+            } else {
+                let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Bitcoin).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
+            }
+        }
+        (self.addr == recv_address.to_string())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidPsbt(
+                "pool output not found".to_string(),
+            ))?;
+        for output in &psbt.unsigned_tx.output {
+            (!output.script_pubkey.is_op_return()).then(|| ()).ok_or(
+                ExchangeError::InvalidPsbt("Outputs should not contain OP_RETURN".to_string()),
+            )?;
+        }
+
         let pool_output = Utxo::try_from(
             pool_utxo_receive.last().expect("already checked;qed"),
             Some(out_rune),
@@ -689,13 +743,45 @@ impl LiquidityPool {
         Ok((state, prev_utxo))
     }
 
+    fn ensure_price_limit(
+        sats: u64,
+        rune: u128,
+        sats1: u64,
+        rune1: u128,
+    ) -> Result<u32, ExchangeError> {
+        let sats = sats as i128;
+        let sats1 = sats1 as i128;
+        let rune = rune as i128;
+        let rune1 = rune1 as i128;
+
+        let a = sats * rune1;
+        let b = sats1 * rune;
+
+        let a = rust_decimal::Decimal::from_i128_with_scale(a, 0);
+        let b = rust_decimal::Decimal::from_i128_with_scale(b, 0);
+        let s = b / a;
+        let max = rust_decimal::Decimal::new(200, 2);
+        let min = rust_decimal::Decimal::new(50, 2);
+        (s >= min && s <= max)
+            .then(|| ())
+            .ok_or(ExchangeError::PriceImpactLimitExceeded)?;
+        let p_delta = (s - rust_decimal::Decimal::ONE) * rust_decimal::Decimal::new(10000, 0);
+        Ok(p_delta
+            .abs()
+            .trunc_with_scale(0)
+            .normalize()
+            .mantissa()
+            .try_into()
+            .unwrap_or(0) as u32)
+    }
+
     /// (x - ∆x)(y + ∆y) = xy
     /// => ∆x = x - xy / (y + ∆y)
     ///    p = ∆y / ∆x
     pub(crate) fn available_to_swap(
         &self,
         taker: CoinBalance,
-    ) -> Result<(CoinBalance, u64, u64), ExchangeError> {
+    ) -> Result<(CoinBalance, u64, u64, u32), ExchangeError> {
         let btc_meta = CoinMeta::btc();
         (taker.id == self.meta.id || taker.id == CoinId::btc())
             .then(|| ())
@@ -710,6 +796,9 @@ impl LiquidityPool {
         if taker.id == CoinId::btc() {
             // btc -> rune
             let input_btc: u64 = taker.value.try_into().expect("BTC amount overflow");
+            (input_btc <= MAX_BTC_VALUE as u64)
+                .then(|| ())
+                .ok_or(ExchangeError::FundsLimitExceeded)?;
             let (input_amount, fee, burn) =
                 Self::charge_fee(input_btc, self.fee_rate, self.burn_rate);
             let rune_remains = btc_supply
@@ -719,7 +808,12 @@ impl LiquidityPool {
             (rune_remains >= self.meta.min_amount)
                 .then(|| ())
                 .ok_or(ExchangeError::EmptyPool)?;
-
+            let price_impact = Self::ensure_price_limit(
+                btc_supply,
+                rune_supply,
+                btc_supply + input_btc,
+                rune_remains,
+            )?;
             let offer = rune_supply - rune_remains;
             Ok((
                 CoinBalance {
@@ -728,6 +822,7 @@ impl LiquidityPool {
                 },
                 fee,
                 burn,
+                price_impact,
             ))
         } else {
             // rune -> btc
@@ -747,13 +842,24 @@ impl LiquidityPool {
             } else {
                 0
             };
+            let out_sats = offer - round_to_keep;
+            (out_sats <= MAX_BTC_VALUE as u64)
+                .then(|| ())
+                .ok_or(ExchangeError::FundsLimitExceeded)?;
+            let price_impact = Self::ensure_price_limit(
+                btc_supply,
+                rune_supply,
+                pool_btc_remains,
+                rune_supply + taker.value,
+            )?;
             Ok((
                 CoinBalance {
                     id: btc_meta.id,
-                    value: (offer - round_to_keep) as u128,
+                    value: out_sats as u128,
                 },
                 fee + round_to_keep,
                 burn,
+                price_impact,
             ))
         }
     }
@@ -771,6 +877,11 @@ impl LiquidityPool {
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "invalid input/output coins, swap requires 1 input and 1 output".to_string(),
+            ))?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
             ))?;
         let input = input_coins.first().clone().expect("checked;qed");
         let output = output_coins.first().clone().expect("checked;qed");
@@ -795,7 +906,7 @@ impl LiquidityPool {
             ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
         )?;
         // check minimal sats
-        let (offer, fee, burn) = self.available_to_swap(input.coin)?;
+        let (offer, fee, burn, _) = self.available_to_swap(input.coin)?;
         let (btc_output, rune_output) = if input.coin.id == CoinId::btc() {
             let input_btc: u64 = input
                 .coin
@@ -873,6 +984,7 @@ impl LiquidityPool {
     /// outputs:
     ///   0: pool
     ///   1: changes
+    #[allow(unused)]
     pub(crate) fn validate_merge_utxos(
         &self,
         psbt: &Psbt,
@@ -1004,88 +1116,34 @@ impl LiquidityPool {
 }
 
 #[test]
-pub fn test_migrate() {
-    use std::str::FromStr;
+pub fn test_price_limit() {
+    // 1:1, p = 1
+    let sats = 1000;
+    let rune = 1000;
+    // 1.1:0.9, p = 11/9 > 110%
+    let sats1 = 1100;
+    let rune1 = 900;
+    assert!(LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1).is_err());
 
-    #[derive(CandidType, Clone, Debug, Deserialize, Serialize)]
-    pub struct LiquidityPoolV1 {
-        pub states: Vec<PoolStateV1>,
-        pub fee_rate: u64,
-        pub burn_rate: u64,
-        pub meta: CoinMeta,
-        pub pubkey: Pubkey,
-        pub tweaked: Pubkey,
-        pub addr: String,
-    }
+    // 10:1, p = 10
+    let sats = 1000;
+    let rune = 100;
+    // 11:1, p = 11
+    let sats1 = 1100;
+    let rune1 = 100;
+    // delta = (11 - 10)/10 = 10%
+    let delta = LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1);
+    assert!(delta.is_ok());
+    assert_eq!(delta.unwrap(), 1000);
 
-    #[derive(CandidType, Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
-    pub struct PoolStateV1 {
-        pub id: Option<Txid>,
-        pub nonce: u64,
-        pub utxo: Option<Utxo>,
-        pub incomes: u64,
-        pub k: u128,
-        pub lp: BTreeMap<String, u128>,
-    }
-
-    impl Storable for PoolStateV1 {
-        const BOUND: Bound = Bound::Unbounded;
-
-        fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-            let mut bytes = vec![];
-            let _ = ciborium::ser::into_writer(self, &mut bytes);
-            std::borrow::Cow::Owned(bytes)
-        }
-
-        fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-            let dire = ciborium::de::from_reader(bytes.as_ref()).expect("failed to decode Pool");
-            dire
-        }
-    }
-
-    impl Storable for LiquidityPoolV1 {
-        const BOUND: Bound = Bound::Unbounded;
-
-        fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-            let mut bytes = vec![];
-            let _ = ciborium::ser::into_writer(self, &mut bytes);
-            std::borrow::Cow::Owned(bytes)
-        }
-
-        fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-            let dire = ciborium::de::from_reader(bytes.as_ref()).expect("failed to decode Pool");
-            dire
-        }
-    }
-
-    let mut lp = BTreeMap::new();
-    lp.insert(
-        "tb1pfr420a6qr8t00xwjyfz7x4lg2ppdqnnm3n7gk8x4q4qra93wx88qpam69j".to_string(),
-        1241451,
-    );
-    let pool = LiquidityPoolV1 {
-        states: vec![PoolStateV1 {
-            id: None,
-            nonce: 1u64,
-            utxo: None,
-            incomes: 200,
-            k: 1231241099123u128,
-            lp,
-        }],
-        fee_rate: 7000,
-        burn_rate: 2000,
-        meta: CoinMeta::btc(),
-        pubkey: Pubkey::from_str(
-            "74503101f591da4f1008b057b79aff41c65f855e0e635a601c689041492b393a",
-        )
-        .unwrap(),
-        tweaked: Pubkey::from_str(
-            "74503101f591da4f1008b057b79aff41c65f855e0e635a601c689041492b393a",
-        )
-        .unwrap(),
-        addr: "tb1puzk3gn4z3rrjjnrhlgk5yvts8ejs0j2umazpcc4anq62wfk00e6ssw9p0n".to_string(),
-    };
-    let serialized = pool.to_bytes();
-    let pool = LiquidityPool::from_bytes(serialized);
-    assert!(pool.states[0].lp_earnings.is_empty());
+    // 1:10, p = 1/10 = 0.1
+    let sats = 100;
+    let rune = 1000;
+    // 1:11, p = 1/11 = 0.09090909
+    let sats1 = 100;
+    let rune1 = 1100;
+    // delta = 9%
+    let delta = LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1);
+    assert!(delta.is_ok());
+    assert_eq!(delta.unwrap(), 909);
 }

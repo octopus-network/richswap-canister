@@ -15,7 +15,11 @@ use ic_stable_structures::{
 };
 use ordinals::{Artifact, Edict, Runestone};
 use ree_types::{
-    bitcoin::{key::TapTweak, secp256k1::Secp256k1, Address, Network},
+    bitcoin::{
+        absolute::LockTime, key::TapTweak, secp256k1::Secp256k1, transaction::Version, Address,
+        Amount, Network, OutPoint, Psbt, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
+        Txid as BtcTxid, Witness,
+    },
     exchange_interfaces::*,
     CoinBalance, CoinId, Pubkey, TxRecord, Txid, Utxo,
 };
@@ -32,7 +36,15 @@ pub const BTC_CANISTER: &'static str = "ghsi2-tqaaa-aaaan-aaaca-cai";
 pub const TESTNET_BTC_CANISTER: &'static str = "g4xu7-jiaaa-aaaan-aaaaq-cai";
 pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
-    "269c1807a44070812e07865efc712c189fdc2624b7cd8f20d158e4f71ba83ce9";
+    "bc1pccdfsdaqk23eszu37jsr494hqcvccg2fkkfkpskk6a84xxyawtsqwxy9q0";
+pub const DEFAULT_TEST_FEE_COLLECTOR: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
+pub const SAFE_HOURSE_ADDRESS: &'static str =
+    "bc1pjn7c3ukkquyzmdugfwcyusdgd9rxht6txgeq93ypqxrg4essqydse5d7c5";
+pub const TESTNET_SAFE_HOURSE_ADDRESS: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
+pub const TESTNET_GUARDIAN_PRINCIPAL: &'static str =
+    "65xmn-zk27d-l4li6-t6jbb-w42dk-k37sl-tthdg-uaevy-ucb34-uu66z-6qe";
+pub const GUARDIAN_PRINCIPAL: &'static str =
+    "v5md3-vs7qy-se4kd-gzd2u-mi225-76rva-rt2ci-ibb2p-petro-2y7aj-hae";
 
 #[derive(Eq, PartialEq, Clone, CandidType, Debug, Deserialize, Serialize)]
 pub struct Output {
@@ -88,6 +100,12 @@ pub enum ExchangeError {
     NoConfirmedUtxos,
     #[error("bitcoin canister's utxo mismatch")]
     UtxoMismatch,
+    #[error("exchange paused")]
+    Paused,
+    #[error("price impact limit exceeded")]
+    PriceImpactLimitExceeded,
+    #[error("Funds limit exceeded")]
+    FundsLimitExceeded,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -105,7 +123,9 @@ const POOLS_MEMORY_ID: MemoryId = MemoryId::new(10);
 
 const BLOCKS_ID: MemoryId = MemoryId::new(8);
 const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
+#[allow(unused)]
 const WHITELIST_ID: MemoryId = MemoryId::new(11);
+const PAUSED_ID: MemoryId = MemoryId::new(12);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -128,8 +148,8 @@ thread_local! {
     static _POOL_ADDR_DEPRECATED: RefCell<StableBTreeMap<String, Pubkey, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(_POOL_ADDR_MEMORY_ID))));
 
-    static FEE_COLLECTOR: RefCell<Cell<Pubkey, Memory>> =
-        RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), Pubkey::from_str(DEFAULT_FEE_COLLECTOR).expect("invalid pubkey: fee collector"))
+    static FEE_COLLECTOR: RefCell<Cell<String, Memory>> =
+        RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), DEFAULT_FEE_COLLECTOR.to_string())
                      .expect("fail to init a StableCell"));
 
     static ORCHESTRATOR: RefCell<Cell<Principal, Memory>> =
@@ -145,6 +165,8 @@ thread_local! {
     pub(crate) static WHITELIST: RefCell<StableBTreeMap<String, (), Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(WHITELIST_ID))));
 
+    pub(crate) static PAUSED: RefCell<Cell<bool, Memory>> =
+        RefCell::new(Cell::init(with_memory_manager(|m| m.get(PAUSED_ID)), false).expect("fail to init a StableCell"));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -280,6 +302,7 @@ pub(crate) fn create_empty_pool(
     Ok(addr)
 }
 
+#[allow(unused)]
 pub(crate) fn p2tr_untweaked(pubkey: &Pubkey) -> String {
     let untweaked = pubkey.to_x_only_public_key();
     cfg_if::cfg_if! {
@@ -292,16 +315,34 @@ pub(crate) fn p2tr_untweaked(pubkey: &Pubkey) -> String {
     address.to_string()
 }
 
-pub(crate) fn get_fee_collector() -> Pubkey {
+pub(crate) fn ensure_online() -> Result<(), ExchangeError> {
+    PAUSED
+        .with(|p| !*p.borrow().get())
+        .then(|| ())
+        .ok_or(ExchangeError::Paused)
+}
+
+pub(crate) fn get_fee_collector() -> String {
     FEE_COLLECTOR.with(|f| f.borrow().get().clone())
 }
 
-pub(crate) fn set_fee_collector(pubkey: Pubkey) {
-    let _ = FEE_COLLECTOR.with(|f| f.borrow_mut().set(pubkey));
+pub(crate) fn set_fee_collector(addr: String) {
+    let _ = FEE_COLLECTOR.with(|f| f.borrow_mut().set(addr));
 }
 
 pub(crate) fn is_orchestrator(principal: &Principal) -> bool {
     ORCHESTRATOR.with(|o| o.borrow().get() == principal)
+}
+
+pub(crate) fn is_guardian(principal: &Principal) -> bool {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            principal == &Principal::from_text(TESTNET_GUARDIAN_PRINCIPAL).unwrap() ||
+                principal == &Principal::from_text("kcbkg-xe6mr-ahw5e-vtnl5-jzrlt-peuis-j4fuh-64oqd-a36ns-vh4z3-xae").unwrap()
+        } else {
+            principal == &Principal::from_text(GUARDIAN_PRINCIPAL).unwrap()
+        }
+    }
 }
 
 pub(crate) fn set_orchestrator(principal: Principal) {
@@ -435,4 +476,105 @@ pub fn get_edicts_in_tx(tx: &ree_types::bitcoin::Transaction) -> Result<Vec<Edic
         }
     }
     Ok(Vec::new())
+}
+
+pub(crate) async fn fork_at_txid(
+    pool_addr: &String,
+    txid: Txid,
+    fee_rate: u64,
+) -> Result<String, String> {
+    ic_cdk::println!("looking for state before {}", txid);
+    let pool = crate::with_pool(pool_addr, |p| {
+        p.clone().ok_or(ExchangeError::InvalidPool.to_string())
+    })?;
+    let (i, _) = pool
+        .states
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.utxo.as_ref().map(|u| u.txid) == Some(txid))
+        .ok_or_else(|| "txid not found")?;
+    if i == 0 {
+        return Err("txid is the first state, couldn't fork".to_string());
+    }
+    let state = pool
+        .states
+        .get(i - 1)
+        .cloned()
+        .expect("must have a previous state");
+    if state.utxo.is_none() {
+        return Err("previous state has no utxo".to_string());
+    }
+    let utxo = state.utxo.as_ref().expect("must exist");
+    ic_cdk::println!("found utxo before malicious tx: {:?}", utxo);
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let sender = Address::from_str(pool_addr).unwrap().require_network(Network::Testnet4).unwrap();
+            let recepient = Address::from_str(TESTNET_SAFE_HOURSE_ADDRESS).unwrap().require_network(Network::Testnet4).unwrap();
+        } else {
+            let sender = Address::from_str(pool_addr).unwrap().require_network(Network::Bitcoin).unwrap();
+            let recepient = Address::from_str(SAFE_HOURSE_ADDRESS).unwrap().require_network(Network::Bitcoin).unwrap();
+        }
+    }
+    let txid = BtcTxid::from_str(&utxo.txid.to_string())
+        .map_err(|_| ExchangeError::InvalidTxid.to_string())?;
+    let tx = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::new(txid, utxo.vout),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            witness: Witness::default(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(utxo.sats),
+            script_pubkey: recepient.script_pubkey(),
+        }],
+    };
+    let mut psbt = Psbt::from_unsigned_tx(tx).map_err(|_| "invalid psbt".to_string())?;
+    let witness_utxo = TxOut {
+        value: Amount::from_sat(utxo.sats),
+        script_pubkey: sender.script_pubkey(),
+    };
+    psbt.inputs[0].witness_utxo = Some(witness_utxo);
+    let fee = 100 * fee_rate;
+    (utxo.sats > fee)
+        .then(|| ())
+        .ok_or(ExchangeError::InsufficientFunds.to_string())?;
+    psbt.unsigned_tx.output[0].value = Amount::from_sat(utxo.sats - fee);
+    ic_cdk::println!("signing psbt with fee_rate = {}", fee_rate);
+    crate::psbt::sign(&mut psbt, &utxo, pool.meta.id.to_bytes()).await?;
+    let finalized = psbt
+        .extract_tx()
+        .map_err(|_| "unable to extract tx from psbt".to_string())?;
+    ic_cdk::println!(
+        "fork_at_txid: txid = {}, fee_rate = {}, vsize = {}, fee = {}",
+        finalized.compute_txid(),
+        fee_rate,
+        finalized.vsize(),
+        fee
+    );
+    // send_transaction(&finalized).await?;
+    let hex = ree_types::bitcoin::consensus::encode::serialize_hex(&finalized);
+    Ok(hex)
+}
+
+pub async fn send_transaction(tx: &Transaction) -> Result<(), String> {
+    let tx_bytes = ree_types::bitcoin::consensus::serialize(&tx);
+    let network = if cfg!(feature = "testnet") {
+        ic_cdk::api::management_canister::bitcoin::BitcoinNetwork::Testnet
+    } else {
+        ic_cdk::api::management_canister::bitcoin::BitcoinNetwork::Mainnet
+    };
+    ic_cdk::api::management_canister::bitcoin::bitcoin_send_transaction(
+        ic_cdk::api::management_canister::bitcoin::SendTransactionRequest {
+            transaction: tx_bytes,
+            network,
+        },
+    )
+    .await
+    .inspect_err(|(code, msg)| {
+        ic_cdk::println!("send_transaction error: code = {:?}, msg = {}", code, msg);
+    })
+    .map_err(|(_, msg)| msg.clone())
 }
