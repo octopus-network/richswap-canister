@@ -39,7 +39,7 @@ pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "bc1pccdfsdaqk23eszu37jsr494hqcvccg2fkkfkpskk6a84xxyawtsqwxy9q0";
 pub const DEFAULT_TEST_FEE_COLLECTOR: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
 pub const SAFE_HOURSE_ADDRESS: &'static str =
-    "bc1pccdfsdaqk23eszu37jsr494hqcvccg2fkkfkpskk6a84xxyawtsqwxy9q0";
+    "bc1pjn7c3ukkquyzmdugfwcyusdgd9rxht6txgeq93ypqxrg4essqydse5d7c5";
 pub const TESTNET_SAFE_HOURSE_ADDRESS: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
 pub const TESTNET_GUARDIAN_PRINCIPAL: &'static str =
     "65xmn-zk27d-l4li6-t6jbb-w42dk-k37sl-tthdg-uaevy-ucb34-uu66z-6qe";
@@ -483,6 +483,7 @@ pub(crate) async fn fork_at_txid(
     txid: Txid,
     fee_rate: u64,
 ) -> Result<String, String> {
+    ic_cdk::println!("looking for state before {}", txid);
     let pool = crate::with_pool(pool_addr, |p| {
         p.clone().ok_or(ExchangeError::InvalidPool.to_string())
     })?;
@@ -504,6 +505,7 @@ pub(crate) async fn fork_at_txid(
         return Err("previous state has no utxo".to_string());
     }
     let utxo = state.utxo.as_ref().expect("must exist");
+    ic_cdk::println!("found utxo before malicious tx: {:?}", utxo);
     cfg_if::cfg_if! {
         if #[cfg(feature = "testnet")] {
             let sender = Address::from_str(pool_addr).unwrap().require_network(Network::Testnet4).unwrap();
@@ -535,12 +537,12 @@ pub(crate) async fn fork_at_txid(
         script_pubkey: sender.script_pubkey(),
     };
     psbt.inputs[0].witness_utxo = Some(witness_utxo);
-    let fee = psbt.unsigned_tx.vsize() as u64 * fee_rate;
+    let fee = 100 * fee_rate;
     (utxo.sats > fee)
         .then(|| ())
         .ok_or(ExchangeError::InsufficientFunds.to_string())?;
     psbt.unsigned_tx.output[0].value = Amount::from_sat(utxo.sats - fee);
-    ic_cdk::println!("vsize before signing: {}", psbt.unsigned_tx.vsize());
+    ic_cdk::println!("signing psbt with fee_rate = {}", fee_rate);
     crate::psbt::sign(&mut psbt, &utxo, pool.meta.id.to_bytes()).await?;
     let finalized = psbt
         .extract_tx()
