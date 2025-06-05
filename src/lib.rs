@@ -25,7 +25,6 @@ use ree_types::{
 };
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -115,11 +114,11 @@ const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
 // deprecated
 const _POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
-const POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
+const _POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
 // the v3 is token -> addr
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(7);
 // the v3 is addr -> pool, notice: 6 is deprecated in the testnet
-const POOLS_MEMORY_ID: MemoryId = MemoryId::new(10);
+const POOLS_MEMORY_ID_V4: MemoryId = MemoryId::new(10);
 
 const BLOCKS_ID: MemoryId = MemoryId::new(8);
 const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
@@ -127,14 +126,19 @@ const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
 const WHITELIST_ID: MemoryId = MemoryId::new(11);
 const PAUSED_ID: MemoryId = MemoryId::new(12);
 
+const POOLS_MEMORY_ID: MemoryId = MemoryId::new(13);
+
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
 
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
 
-    static POOLS_V2: RefCell<StableBTreeMap<Pubkey, crate::migrate::LiquidityPoolV2, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
+    // static POOLS_V2: RefCell<StableBTreeMap<Pubkey, crate::migrate::LiquidityPoolV2, Memory>> =
+    //     RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
+
+    pub(crate) static POOLS_V4: RefCell<StableBTreeMap<String, migrate::LiquidityPoolV4, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V4))));
 
     pub(crate) static POOLS: RefCell<StableBTreeMap<String, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));
@@ -354,105 +358,104 @@ pub(crate) fn sqrt(x: u128) -> u128 {
     x.isqrt()
 }
 
-pub(crate) fn calculate_merge_utxos(utxos: &[Utxo], rune_id: CoinId) -> (u64, CoinBalance) {
-    let mut sats = 0;
-    let mut balance = CoinBalance {
-        id: rune_id,
-        value: 0,
-    };
-    for utxo in utxos {
-        if let Some(rune) = &utxo.maybe_rune {
-            if rune.id == rune_id {
-                balance.value += rune.value;
-            }
-        }
-        sats += utxo.sats;
-    }
-    (sats, balance)
-}
+// pub(crate) fn calculate_merge_utxos(utxos: &[Utxo], rune_id: CoinId) -> (u64, CoinBalance) {
+//     let mut sats = 0;
+//     let mut balance = CoinBalance {
+//         id: rune_id,
+//         value: 0,
+//     };
+//     for utxo in utxos {
+//         if let Some(rune) = &utxo.maybe_rune {
+//             if rune.id == rune_id {
+//                 balance.value += rune.value;
+//             //         }
+//         sats += utxo.sats;
+//     }
+//     (sats, balance)
+// }
 
-pub(crate) async fn get_untracked_utxos_of_pool(
-    pool: &LiquidityPool,
-) -> Result<Vec<Utxo>, ExchangeError> {
-    let confirmed = get_confirmed_utxos_of_pool(pool).await?;
-    if confirmed.is_empty() || confirmed.len() == 1 {
-        return Err(ExchangeError::NoConfirmedUtxos);
-    }
-    // TODO if some tx is confirming based on the tracking UTXO of pool, the mempool will reject this
-    Ok(confirmed.values().cloned().collect::<Vec<_>>())
-}
+// pub(crate) async fn get_untracked_utxos_of_pool(
+//     pool: &LiquidityPool,
+// ) -> Result<Vec<Utxo>, ExchangeError> {
+//     let confirmed = get_confirmed_utxos_of_pool(pool).await?;
+//     if confirmed.is_empty() || confirmed.len() == 1 {
+//         return Err(ExchangeError::NoConfirmedUtxos);
+//     }
+//     // TODO if some tx is confirming based on the tracking UTXO of pool, the mempool will reject this
+//     Ok(confirmed.values().cloned().collect::<Vec<_>>())
+// }
 
-/// fetch utxos of pool from btc canister & rune indexer
-pub(crate) async fn get_confirmed_utxos_of_pool(
-    pool: &LiquidityPool,
-) -> Result<BTreeMap<String, Utxo>, ExchangeError> {
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "testnet")] {
-            let (btc_canister_id, indexer_id, network) =
-            (Principal::from_text(TESTNET_BTC_CANISTER).unwrap(), Principal::from_text(TESTNET_RUNE_INDEXER_CANISTER).unwrap(), bitcoin_canister::Network::Testnet);
-        } else {
-            let (btc_canister_id, indexer_id, network) =
-            (Principal::from_text(BTC_CANISTER).unwrap(), Principal::from_text(RUNE_INDEXER_CANISTER).unwrap(), bitcoin_canister::Network::Mainnet);
-        }
-    }
-    let btc_canister = bitcoin_canister::Service(btc_canister_id);
-    let indexer = rune_indexer::Service(indexer_id);
-    let (response,): (bitcoin_canister::GetUtxosResponse,) = btc_canister
-        .bitcoin_get_utxos(bitcoin_canister::GetUtxosRequest {
-            network,
-            filter: Some(bitcoin_canister::GetUtxosRequestFilterInner::MinConfirmations(1)),
-            address: pool.addr.clone(),
-        })
-        .await
-        .inspect_err(|e| ic_cdk::println!("{:?}", e.1))
-        .map_err(|_| ExchangeError::FetchBitcoinCanisterError)?;
-    let mut utxos = vec![];
-    for utxo in response.utxos {
-        utxos.push(Utxo {
-            txid: Txid::from_bytes(utxo.outpoint.txid.as_slice())
-                .map_err(|_| ExchangeError::InvalidTxid)?,
-            vout: utxo.outpoint.vout,
-            maybe_rune: None,
-            sats: utxo.value,
-        });
-    }
+// fetch utxos of pool from btc canister & rune indexer
+// pub(crate) async fn get_confirmed_utxos_of_pool(
+//     pool: &LiquidityPool,
+// ) -> Result<BTreeMap<String, Utxo>, ExchangeError> {
+//     cfg_if::cfg_if! {
+//         if #[cfg(feature = "testnet")] {
+//             let (btc_canister_id, indexer_id, network) =
+//             (Principal::from_text(TESTNET_BTC_CANISTER).unwrap(), Principal::from_text(TESTNET_RUNE_INDEXER_CANISTER).unwrap(), bitcoin_canister::Network::Testnet);
+//         } else {
+//             let (btc_canister_id, indexer_id, network) =
+//             (Principal::from_text(BTC_CANISTER).unwrap(), Principal::from_text(RUNE_INDEXER_CANISTER).unwrap(), bitcoin_canister::Network::Mainnet);
+//         }
+//     }
+//     let btc_canister = bitcoin_canister::Service(btc_canister_id);
+//     let indexer = rune_indexer::Service(indexer_id);
+//     let (response,): (bitcoin_canister::GetUtxosResponse,) = btc_canister
+//         .bitcoin_get_utxos(bitcoin_canister::GetUtxosRequest {
+//             network,
+//             filter: Some(bitcoin_canister::GetUtxosRequestFilterInner::MinConfirmations(1)),
+//             address: pool.addr.clone(),
+//         })
+//         .await
+//         .inspect_err(|e| ic_cdk::println!("{:?}", e.1))
+//         .map_err(|_| ExchangeError::FetchBitcoinCanisterError)?;
+//     let mut utxos = vec![];
+//     for utxo in response.utxos {
+//         utxos.push(Utxo {
+//             txid: Txid::from_bytes(utxo.outpoint.txid.as_slice())
+//                 .map_err(|_| ExchangeError::InvalidTxid)?,
+//             vout: utxo.outpoint.vout,
+//             coins: CoinBalances,
+//             sats: utxo.value,
+//         });
+//     }
 
-    let (runes,): (rune_indexer::Result_,) = indexer
-        .get_rune_balances_for_outputs(utxos.iter().map(|utxo| utxo.outpoint()).collect::<Vec<_>>())
-        .await
-        .map_err(|_| ExchangeError::FetchRuneIndexerError)?;
+//     let (runes,): (rune_indexer::Result_,) = indexer
+//         .get_rune_balances_for_outputs(utxos.iter().map(|utxo| utxo.outpoint()).collect::<Vec<_>>())
+//         .await
+//         .map_err(|_| ExchangeError::FetchRuneIndexerError)?;
 
-    match runes {
-        rune_indexer::Result_::Ok(runes) => {
-            (runes.len() == utxos.len())
-                .then(|| ())
-                .ok_or(ExchangeError::RuneIndexerError(
-                    "UTXOs mismatch".to_string(),
-                ))?;
-            for (i, utxo) in utxos.iter_mut().enumerate() {
-                utxo.maybe_rune = runes[i]
-                    .as_ref()
-                    .map(|rs| {
-                        rs.iter()
-                            .find(|r| r.rune_id == pool.meta.id.to_string())
-                            .map(|b| CoinBalance {
-                                id: CoinId::from_str(&b.rune_id).unwrap(),
-                                value: b.amount,
-                            })
-                            .clone()
-                    })
-                    .flatten();
-            }
-        }
-        rune_indexer::Result_::Err(_) => {
-            return Err(ExchangeError::RuneIndexerError("".to_string()));
-        }
-    }
-    Ok(utxos
-        .into_iter()
-        .map(|utxo| (utxo.outpoint(), utxo.clone()))
-        .collect())
-}
+//     match runes {
+//         rune_indexer::Result_::Ok(runes) => {
+//             (runes.len() == utxos.len())
+//                 .then(|| ())
+//                 .ok_or(ExchangeError::RuneIndexerError(
+//                     "UTXOs mismatch".to_string(),
+//                 ))?;
+//             for (i, utxo) in utxos.iter_mut().enumerate() {
+//                 utxo.maybe_rune = runes[i]
+//                     .as_ref()
+//                     .map(|rs| {
+//                         rs.iter()
+//                             .find(|r| r.rune_id == pool.meta.id.to_string())
+//                             .map(|b| CoinBalance {
+//                                 id: CoinId::from_str(&b.rune_id).unwrap(),
+//                                 value: b.amount,
+//                             })
+//                             .clone()
+//                     })
+//                     .flatten();
+//             }
+//         }
+//         rune_indexer::Result_::Err(_) => {
+//             return Err(ExchangeError::RuneIndexerError("".to_string()));
+//         }
+//     }
+//     Ok(utxos
+//         .into_iter()
+//         .map(|utxo| (utxo.outpoint(), utxo.clone()))
+//         .collect())
+// }
 
 pub fn get_edicts_in_tx(tx: &ree_types::bitcoin::Transaction) -> Result<Vec<Edict>, ExchangeError> {
     let maybe_runestone = Runestone::decipher(tx);

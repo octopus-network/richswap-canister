@@ -25,8 +25,8 @@ hex = "0.4"
 lazy_static = "1.5"
 ic-stable-structures = "0.6"
 ciborium = "0.2"
-ree-types-v3 = { version = "0.3", package = "ree-types" }
-ree-types = { git = "https://github.com/octopus-network/ree-types.git", rev = "f21669c412c4dbc8ccf9f066f4c11ac1df453462" }
+ree-types-v4 = { git = "https://github.com/octopus-network/ree-types.git", rev = "f21669c412c4dbc8ccf9f066f4c11ac1df453462", package = "ree-types" }
+ree-types = { git = "https://github.com/octopus-network/ree-types.git", rev = "3d0fb503384082bdeaf368305c4229801ee9ebd3" }
 rune-indexer = { path = "./crates/rune-indexer" }
 ic-log = { path = "./crates/ic-log" }
 chain-key = { path = "./crates/chain-key" }
