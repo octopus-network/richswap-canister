@@ -22,9 +22,9 @@ hex = "0.4.3"
 base64 = "0.21.0"
 
 # Internet Computer (IC) related libraries
-ic-agent = "0.28.0"
-ic-utils = "0.28.0"
-candid = "0.8.4"
+ic-agent = "0.40"
+ic-utils = "0.40"
+candid = "0.10"
 
 # Async runtime
 tokio = { version = "1.25", features = ["full"] }
@@ -39,3 +39,4 @@ env_logger = "0.10"
 log = "0.4"
 serde_with = "3.12.0"
 ordinals = "0.0.15"
+ree-types = { git = "https://github.com/octopus-network/ree-types.git", branch = "v0.5.0-dev" }
