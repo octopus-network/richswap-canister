@@ -3,10 +3,11 @@ use candid::{CandidType, Deserialize};
 use ic_stable_structures::{storable::Bound, Storable};
 use ree_types::{
     bitcoin::{Address, Network},
-    CoinBalance, CoinId, InputCoin, OutputCoin, Pubkey, Txid, Utxo,
+    CoinBalance, CoinBalances, CoinId, InputCoin, OutputCoin, Pubkey, Txid, Utxo,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 /// represents 0.7/100 = 7/1_000 = 7000/1_000_000
 pub const DEFAULT_FEE_RATE: u64 = 7000;
@@ -718,6 +719,13 @@ impl LiquidityPool {
         let pool_output = pool_utxo_receive.last().map(|s| s.clone()).ok_or(
             ExchangeError::InvalidSignPsbtArgs("pool_utxo_receive not found".to_string()),
         )?;
+        ic_cdk::println!(
+            "pool_output: {:?}, out_sats: {}, out_rune({}): {}",
+            pool_output,
+            out_sats,
+            out_rune.id,
+            out_rune.value
+        );
         (pool_output.sats == out_sats
             && pool_output.coins.value_of(&self.meta.id) == out_rune.value)
             .then(|| ())
@@ -979,106 +987,53 @@ impl LiquidityPool {
         Ok((state, prev_utxo))
     }
 
-    // PSBT:
-    //
-    // inputs:
-    //   0 ~ n-1: pool
-    //   n: user
-    // outputs:
-    //   0: pool
-    //   1: changes
-    // #[allow(unused)]
-    // pub(crate) fn validate_merge_utxos(
-    //     &self,
-    //     psbt: &Psbt,
-    //     txid: Txid,
-    //     nonce: u64,
-    //     expecting_inputs: &mut Vec<Utxo>,
-    //     initiator: String,
-    // ) -> Result<PoolState, ExchangeError> {
-    //     let mut state = self.states.last().ok_or(ExchangeError::EmptyPool)?.clone();
-    //     (state.nonce == nonce)
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
-    //     (psbt.unsigned_tx.input.len() == expecting_inputs.len() + 1)
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::InvalidPsbt("inputs not enough".to_string()))?;
-    //     (psbt.unsigned_tx.output.len() == 2)
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::InvalidPsbt("outputs must be 2".to_string()))?;
-    //     crate::WHITELIST
-    //         .with_borrow(|m| m.contains_key(&initiator))
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::InvalidInput)?;
-
-    //     for (i, utxo) in expecting_inputs.iter().enumerate() {
-    //         let input = &psbt.unsigned_tx.input[i];
-    //         let prev_outpoint = input.previous_output;
-    //         if crate::psbt::cmp(utxo, &prev_outpoint).is_none() {
-    //             return Err(ExchangeError::InvalidPsbt(
-    //                 "inputs mismatch with expecting utxo from bitcoin".to_string(),
-    //             ));
-    //         }
-    //     }
-
-    //     // the 0 output
-    //     let maybe_pool_output = &psbt.unsigned_tx.output[0];
-    //     maybe_pool_output
-    //         .script_pubkey
-    //         .is_p2tr()
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::InvalidPsbt(
-    //             "pool output must be p2tr".to_string(),
-    //         ))?;
-    //     cfg_if::cfg_if! {
-    //         if #[cfg(feature = "testnet")] {
-    //             let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Testnet4).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
-    //         } else {
-    //             let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Bitcoin).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
-    //         }
-    //     }
-    //     (self.addr == recv_address.to_string())
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::InvalidPsbt(
-    //             "pool output not found".to_string(),
-    //         ))?;
-
-    //     // the 1 output must be NOT op_return since we require only 2 outputs
-    //     let unknown = &psbt.unsigned_tx.output[1];
-    //     (!unknown.script_pubkey.is_op_return())
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::InvalidPsbt(
-    //             "outputs shouldn't contain op_return".to_string(),
-    //         ))?;
-    //     let (out_sats, out_rune) = crate::calculate_merge_utxos(expecting_inputs, self.base_id());
-    //     (maybe_pool_output.value.to_sat() == out_sats)
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::InvalidPsbt(
-    //             "pool output mismatch".to_string(),
-    //         ))?;
-    //     (out_sats > state.incomes)
-    //         .then(|| ())
-    //         .ok_or(ExchangeError::InsufficientFunds)?;
-    //     let new_k = crate::sqrt(out_rune.value * (out_sats - state.incomes) as u128);
-    //     let mut new_lp = BTreeMap::new();
-    //     for (lp, share) in state.lp.iter() {
-    //         new_lp.insert(
-    //             lp.clone(),
-    //             share
-    //                 .checked_mul(new_k)
-    //                 .and_then(|mul| mul.checked_div(state.k))
-    //                 .ok_or(ExchangeError::Overflow)?,
-    //         );
-    //     }
-    //     let k_adjust = new_lp.values().sum();
-    //     state.id = Some(txid);
-    //     state.nonce += 1;
-    //     state.k = k_adjust;
-    //     state.lp = new_lp;
-    //     state.utxo = Some(crate::utxo(txid, 0, out_sats, Some(out_rune)));
-    //     // TODO update k and lp
-    //     Ok(state)
-    // }
+    pub(crate) async fn merge_utxos(
+        &self,
+        inputs: &[Utxo],
+        fee_rate: u64,
+    ) -> Result<PoolState, ExchangeError> {
+        let mut state = self.states.last().ok_or(ExchangeError::EmptyPool)?.clone();
+        let (_, out_rune) = crate::calculate_merge_utxos(inputs, self.base_id());
+        let mut psbt = crate::construct_psbt(&self.addr, &self.addr, &inputs, fee_rate)?;
+        let out_sats = psbt.unsigned_tx.output[0].value.to_sat();
+        for utxo in inputs {
+            crate::psbt::sign(&mut psbt, &utxo, self.meta.id.to_bytes())
+                .await
+                .inspect_err(|e| ic_cdk::println!("sign error: {}", e))
+                .map_err(|_| ExchangeError::ChainKeyError)?;
+        }
+        let new_k = crate::sqrt(out_rune.value * (out_sats - state.incomes) as u128);
+        let mut new_lp = BTreeMap::new();
+        for (lp, share) in state.lp.iter() {
+            new_lp.insert(
+                lp.clone(),
+                share
+                    .checked_mul(new_k)
+                    .and_then(|mul| mul.checked_div(state.k))
+                    .ok_or(ExchangeError::Overflow)?,
+            );
+        }
+        let k_adjust = new_lp.values().sum();
+        let txid = Txid::from_str(&psbt.unsigned_tx.compute_txid().to_string()).unwrap();
+        let mut coins = CoinBalances::new();
+        coins.add_coin(&out_rune);
+        let output = Utxo {
+            txid: txid.clone(),
+            vout: 0,
+            sats: out_sats,
+            coins,
+        };
+        crate::send_transaction(&psbt.extract_tx().expect("shouldn't fail"))
+            .await
+            .inspect_err(|e| ic_cdk::println!("send transaction error: {}", e))
+            .map_err(|_| ExchangeError::FetchBitcoinCanisterError)?;
+        state.id = Some(txid);
+        state.nonce += 1;
+        state.k = k_adjust;
+        state.lp = new_lp;
+        state.utxo = Some(output);
+        Ok(state)
+    }
 
     pub(crate) fn rollback(&mut self, txid: Txid) -> Result<(), ExchangeError> {
         let idx = self

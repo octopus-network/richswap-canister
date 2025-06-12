@@ -180,4 +180,5 @@ service : {
   set_donation_amount : (text, nat64, nat) -> (Result_14);
   set_fee_collector : (text) -> ();
   set_orchestrator : (principal) -> ();
+  sync_with_btc : (text, nat64) -> (Result_1);
 }

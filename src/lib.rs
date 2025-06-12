@@ -358,104 +358,104 @@ pub(crate) fn sqrt(x: u128) -> u128 {
     x.isqrt()
 }
 
-// pub(crate) fn calculate_merge_utxos(utxos: &[Utxo], rune_id: CoinId) -> (u64, CoinBalance) {
-//     let mut sats = 0;
-//     let mut balance = CoinBalance {
-//         id: rune_id,
-//         value: 0,
-//     };
-//     for utxo in utxos {
-//         if let Some(rune) = &utxo.maybe_rune {
-//             if rune.id == rune_id {
-//                 balance.value += rune.value;
-//             //         }
-//         sats += utxo.sats;
-//     }
-//     (sats, balance)
-// }
+pub(crate) fn calculate_merge_utxos(utxos: &[Utxo], rune_id: CoinId) -> (u64, CoinBalance) {
+    let mut sats = 0;
+    let mut balance = CoinBalance {
+        id: rune_id,
+        value: 0,
+    };
+    for utxo in utxos {
+        balance.value += utxo.coins.value_of(&rune_id);
+        sats += utxo.sats;
+    }
+    (sats, balance)
+}
 
-// pub(crate) async fn get_untracked_utxos_of_pool(
-//     pool: &LiquidityPool,
-// ) -> Result<Vec<Utxo>, ExchangeError> {
-//     let confirmed = get_confirmed_utxos_of_pool(pool).await?;
-//     if confirmed.is_empty() || confirmed.len() == 1 {
-//         return Err(ExchangeError::NoConfirmedUtxos);
-//     }
-//     // TODO if some tx is confirming based on the tracking UTXO of pool, the mempool will reject this
-//     Ok(confirmed.values().cloned().collect::<Vec<_>>())
-// }
+pub(crate) async fn get_untracked_utxos_of_pool(
+    pool: &LiquidityPool,
+) -> Result<Vec<Utxo>, ExchangeError> {
+    let confirmed = get_confirmed_utxos_of_pool(pool).await?;
+    if confirmed.is_empty() || confirmed.len() == 1 {
+        return Err(ExchangeError::NoConfirmedUtxos);
+    }
+    // TODO if some tx is confirming based on the tracking UTXO of pool, the mempool will reject this
+    Ok(confirmed.values().cloned().collect::<Vec<_>>())
+}
 
 // fetch utxos of pool from btc canister & rune indexer
-// pub(crate) async fn get_confirmed_utxos_of_pool(
-//     pool: &LiquidityPool,
-// ) -> Result<BTreeMap<String, Utxo>, ExchangeError> {
-//     cfg_if::cfg_if! {
-//         if #[cfg(feature = "testnet")] {
-//             let (btc_canister_id, indexer_id, network) =
-//             (Principal::from_text(TESTNET_BTC_CANISTER).unwrap(), Principal::from_text(TESTNET_RUNE_INDEXER_CANISTER).unwrap(), bitcoin_canister::Network::Testnet);
-//         } else {
-//             let (btc_canister_id, indexer_id, network) =
-//             (Principal::from_text(BTC_CANISTER).unwrap(), Principal::from_text(RUNE_INDEXER_CANISTER).unwrap(), bitcoin_canister::Network::Mainnet);
-//         }
-//     }
-//     let btc_canister = bitcoin_canister::Service(btc_canister_id);
-//     let indexer = rune_indexer::Service(indexer_id);
-//     let (response,): (bitcoin_canister::GetUtxosResponse,) = btc_canister
-//         .bitcoin_get_utxos(bitcoin_canister::GetUtxosRequest {
-//             network,
-//             filter: Some(bitcoin_canister::GetUtxosRequestFilterInner::MinConfirmations(1)),
-//             address: pool.addr.clone(),
-//         })
-//         .await
-//         .inspect_err(|e| ic_cdk::println!("{:?}", e.1))
-//         .map_err(|_| ExchangeError::FetchBitcoinCanisterError)?;
-//     let mut utxos = vec![];
-//     for utxo in response.utxos {
-//         utxos.push(Utxo {
-//             txid: Txid::from_bytes(utxo.outpoint.txid.as_slice())
-//                 .map_err(|_| ExchangeError::InvalidTxid)?,
-//             vout: utxo.outpoint.vout,
-//             coins: CoinBalances,
-//             sats: utxo.value,
-//         });
-//     }
+pub(crate) async fn get_confirmed_utxos_of_pool(
+    pool: &LiquidityPool,
+) -> Result<std::collections::BTreeMap<String, Utxo>, ExchangeError> {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let (btc_canister_id, indexer_id, network) =
+            (Principal::from_text(TESTNET_BTC_CANISTER).unwrap(), Principal::from_text(TESTNET_RUNE_INDEXER_CANISTER).unwrap(), bitcoin_canister::Network::Testnet);
+        } else {
+            let (btc_canister_id, indexer_id, network) =
+            (Principal::from_text(BTC_CANISTER).unwrap(), Principal::from_text(RUNE_INDEXER_CANISTER).unwrap(), bitcoin_canister::Network::Mainnet);
+        }
+    }
+    let btc_canister = bitcoin_canister::Service(btc_canister_id);
+    let indexer = rune_indexer::Service(indexer_id);
+    let (response,): (bitcoin_canister::GetUtxosResponse,) = btc_canister
+        .bitcoin_get_utxos(bitcoin_canister::GetUtxosRequest {
+            network,
+            filter: Some(bitcoin_canister::GetUtxosRequestFilterInner::MinConfirmations(1)),
+            address: pool.addr.clone(),
+        })
+        .await
+        .inspect_err(|e| ic_cdk::println!("{:?}", e.1))
+        .map_err(|_| ExchangeError::FetchBitcoinCanisterError)?;
+    let mut utxos = vec![];
+    for utxo in response.utxos {
+        utxos.push(Utxo {
+            txid: Txid::from_bytes(utxo.outpoint.txid.as_slice())
+                .map_err(|_| ExchangeError::InvalidTxid)?,
+            vout: utxo.outpoint.vout,
+            coins: ree_types::CoinBalances::new(),
+            sats: utxo.value,
+        });
+    }
 
-//     let (runes,): (rune_indexer::Result_,) = indexer
-//         .get_rune_balances_for_outputs(utxos.iter().map(|utxo| utxo.outpoint()).collect::<Vec<_>>())
-//         .await
-//         .map_err(|_| ExchangeError::FetchRuneIndexerError)?;
+    let (runes,): (rune_indexer::Result_,) = indexer
+        .get_rune_balances_for_outputs(utxos.iter().map(|utxo| utxo.outpoint()).collect::<Vec<_>>())
+        .await
+        .map_err(|_| ExchangeError::FetchRuneIndexerError)?;
 
-//     match runes {
-//         rune_indexer::Result_::Ok(runes) => {
-//             (runes.len() == utxos.len())
-//                 .then(|| ())
-//                 .ok_or(ExchangeError::RuneIndexerError(
-//                     "UTXOs mismatch".to_string(),
-//                 ))?;
-//             for (i, utxo) in utxos.iter_mut().enumerate() {
-//                 utxo.maybe_rune = runes[i]
-//                     .as_ref()
-//                     .map(|rs| {
-//                         rs.iter()
-//                             .find(|r| r.rune_id == pool.meta.id.to_string())
-//                             .map(|b| CoinBalance {
-//                                 id: CoinId::from_str(&b.rune_id).unwrap(),
-//                                 value: b.amount,
-//                             })
-//                             .clone()
-//                     })
-//                     .flatten();
-//             }
-//         }
-//         rune_indexer::Result_::Err(_) => {
-//             return Err(ExchangeError::RuneIndexerError("".to_string()));
-//         }
-//     }
-//     Ok(utxos
-//         .into_iter()
-//         .map(|utxo| (utxo.outpoint(), utxo.clone()))
-//         .collect())
-// }
+    match runes {
+        rune_indexer::Result_::Ok(runes) => {
+            (runes.len() == utxos.len())
+                .then(|| ())
+                .ok_or(ExchangeError::RuneIndexerError(
+                    "UTXOs mismatch".to_string(),
+                ))?;
+            for (i, utxo) in utxos.iter_mut().enumerate() {
+                let maybe_rune = runes[i]
+                    .as_ref()
+                    .map(|rs| {
+                        rs.iter()
+                            .find(|r| r.rune_id == pool.meta.id.to_string())
+                            .map(|b| CoinBalance {
+                                id: CoinId::from_str(&b.rune_id).unwrap(),
+                                value: b.amount,
+                            })
+                            .clone()
+                    })
+                    .flatten();
+                if let Some(rune) = maybe_rune {
+                    utxo.coins.add_coin(&rune);
+                }
+            }
+        }
+        rune_indexer::Result_::Err(_) => {
+            return Err(ExchangeError::RuneIndexerError("".to_string()));
+        }
+    }
+    Ok(utxos
+        .into_iter()
+        .map(|utxo| (utxo.outpoint(), utxo.clone()))
+        .collect())
+}
 
 pub fn get_edicts_in_tx(tx: &ree_types::bitcoin::Transaction) -> Result<Vec<Edict>, ExchangeError> {
     let maybe_runestone = Runestone::decipher(tx);
@@ -479,6 +479,60 @@ pub fn get_edicts_in_tx(tx: &ree_types::bitcoin::Transaction) -> Result<Vec<Edic
         }
     }
     Ok(Vec::new())
+}
+
+pub(crate) fn construct_psbt(
+    initiator: impl AsRef<str>,
+    recepient: impl AsRef<str>,
+    utxos: &[Utxo],
+    fee_rate: u64,
+) -> Result<Psbt, ExchangeError> {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let sender = Address::from_str(initiator.as_ref()).unwrap().require_network(Network::Testnet4).unwrap();
+            let recepient = Address::from_str(recepient.as_ref()).unwrap().require_network(Network::Testnet4).unwrap();
+        } else {
+            let sender = Address::from_str(initiator.as_ref()).unwrap().require_network(Network::Bitcoin).unwrap();
+            let recepient = Address::from_str(recepient.as_ref()).unwrap().require_network(Network::Bitcoin).unwrap();
+        }
+    }
+    let inputs = utxos
+        .iter()
+        .map(|utxo| {
+            let txid = BtcTxid::from_str(&utxo.txid.to_string()).expect("invalid txid");
+            TxIn {
+                previous_output: OutPoint::new(txid, utxo.vout),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::default(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let total_sats = utxos.iter().map(|u| u.sats).sum::<u64>();
+    let tx = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: inputs,
+        output: vec![TxOut {
+            value: Amount::from_sat(total_sats),
+            script_pubkey: recepient.script_pubkey(),
+        }],
+    };
+    let mut psbt = Psbt::from_unsigned_tx(tx).expect("invalid psbt");
+
+    for (i, input) in psbt.inputs.iter_mut().enumerate() {
+        let witness_utxo = TxOut {
+            value: Amount::from_sat(utxos[i].sats),
+            script_pubkey: sender.script_pubkey(),
+        };
+        input.witness_utxo = Some(witness_utxo);
+    }
+    let fee = psbt.unsigned_tx.vsize() as u64 * fee_rate;
+    (total_sats > fee)
+        .then(|| ())
+        .ok_or(ExchangeError::InsufficientFunds)?;
+    psbt.unsigned_tx.output[0].value = Amount::from_sat(total_sats - fee);
+    Ok(psbt)
 }
 
 pub(crate) async fn fork_at_txid(

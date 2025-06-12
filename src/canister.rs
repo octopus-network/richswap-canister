@@ -155,21 +155,6 @@ pub struct UtxoToBeMerge {
     pub out_rune: CoinBalance,
 }
 
-// #[update]
-// pub async fn pre_sync_with_btc(addr: String) -> Result<UtxoToBeMerge, ExchangeError> {
-//     crate::ensure_online()?;
-//     let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
-//     let utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
-//     let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
-//     let (out_sats, out_rune) = crate::calculate_merge_utxos(&utxos, pool.meta.id);
-//     Ok(UtxoToBeMerge {
-//         utxos,
-//         nonce: state.nonce,
-//         out_sats,
-//         out_rune,
-//     })
-// }
-
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DonateIntention {
     pub input: Utxo,
@@ -695,25 +680,6 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             })
             .map_err(|e| e.to_string())?;
         }
-        // "sync" => {
-        //     let mut utxos = crate::get_untracked_utxos_of_pool(&pool)
-        //         .await
-        //         .map_err(|e| e.to_string())?;
-        //     let new_state = pool
-        //         .validate_merge_utxos(&psbt, txid, nonce, &mut utxos, initiator)
-        //         .map_err(|e| e.to_string())?;
-        //     for utxo in utxos {
-        //         crate::psbt::sign(&mut psbt, &utxo, pool.base_id().to_bytes())
-        //             .await
-        //             .map_err(|e| e.to_string())?;
-        //     }
-        //     crate::with_pool_mut(pool_address, |p| {
-        //         let mut pool = p.expect("already checked;qed");
-        //         pool.commit(new_state);
-        //         Ok(Some(pool))
-        //     })
-        //     .map_err(|e| e.to_string())?;
-        // }
         _ => {
             return Err("invalid method".to_string());
         }
@@ -770,6 +736,23 @@ pub fn query_blocks() -> Result<Vec<BlockInfo>, String> {
     });
 
     Ok(res)
+}
+
+#[update(guard = "ensure_guardian")]
+pub async fn sync_with_btc(addr: String, fee_rate: u64) -> Result<Txid, ExchangeError> {
+    let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
+    let utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
+    let new_state = pool.merge_utxos(&utxos, fee_rate).await?;
+    let txid = new_state
+        .id
+        .map(|v| v.clone())
+        .expect("already checked;qed");
+    crate::with_pool_mut(addr, |p| {
+        let mut pool = p.expect("already checked;qed");
+        pool.commit(new_state);
+        Ok(Some(pool))
+    })?;
+    Ok(txid)
 }
 
 #[update(guard = "ensure_guardian")]

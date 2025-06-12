@@ -793,9 +793,6 @@ async fn submit_psbt_to_orchestrator(
 // Helper function to encode RUNE OP_RETURN
 fn encode_rune_op_return(coin_balance: &CoinBalance) -> Result<ScriptBuf> {
     use ordinals::varint;
-    // let mut parts = coin_balance.id.split(':');
-    // let block: u64 = parts.next().map(|s| s.parse().ok()).flatten().unwrap();
-    // let tx: u32 = parts.next().map(|s| s.parse().ok()).flatten().unwrap();
     let block = coin_balance.id.block;
     let tx = coin_balance.id.tx;
     let mut rune_script_bytes = Vec::<u8>::new();
