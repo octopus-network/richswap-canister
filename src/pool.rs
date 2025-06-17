@@ -748,6 +748,7 @@ impl LiquidityPool {
         state.nonce += 1;
         state.k = k_adjust;
         state.lp = new_lp;
+        state.total_btc_donation += input.coin.value as u64;
         state.utxo = Some(pool_output);
         Ok((state, prev_utxo))
     }
