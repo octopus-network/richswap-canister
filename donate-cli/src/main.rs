@@ -14,11 +14,12 @@ use candid::{encode_args, CandidType, Decode, Deserialize, Encode};
 use clap::Parser;
 use ic_agent::{export::Principal, identity::AnonymousIdentity, Agent};
 use log::error;
+use ree_types::*;
 use serde::Serialize;
 use std::str::FromStr;
 use tokio::io::{self as tokio_io, AsyncBufReadExt, AsyncWriteExt};
 
-mod coin_id;
+// mod coin_id;
 
 // Constants
 const COIN: u64 = 100_000_000;
@@ -69,13 +70,6 @@ struct Utxo {
     vout: u32,
     sats: u64,
     maybe_rune: Option<CoinBalance>,
-}
-
-// Canister response types for candid deserialization
-#[derive(Debug, Clone, Serialize, Deserialize, CandidType)]
-struct CoinBalance {
-    id: String,
-    value: u128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, CandidType)]
@@ -253,7 +247,7 @@ async fn async_main(args: Args) -> Result<()> {
     let canister_utxos = fetch_utxos_from_canister(&args.pool_address, 10000, &config.swap).await?;
     // Extract UTXOs and nonce
     let nonce = canister_utxos.nonce;
-    let pool_utxo = canister_utxos.input;
+    let pool_utxo = canister_utxos.input.clone();
     println!(
         "Pool UTXO: {}:{}, sats: {}, rune: {:?}",
         pool_utxo.txid, pool_utxo.vout, pool_utxo.sats, pool_utxo.maybe_rune
@@ -356,6 +350,7 @@ async fn async_main(args: Args) -> Result<()> {
     println!("Submitting PSBT to orchestrator with nonce: {}", nonce);
     let response = submit_psbt_to_orchestrator(
         &psbt,
+        &canister_utxos,
         &pool_address,
         nonce,
         pool_utxo,
@@ -426,7 +421,7 @@ async fn fetch_utxos_from_btc_rpc(address: &str, rpc_url: &str) -> Result<Vec<Ut
         ],
     };
     let builder = client.post(rpc_url);
-    #[allow(dead_code)]
+    #[allow(dead_code, non_snake_case)]
     #[derive(Deserialize, Debug)]
     struct RpcUnspent {
         txid: String,
@@ -556,15 +551,15 @@ fn make_psbt_from_utxos(
     outputs.push(pool_txout);
 
     // Output 1: OP_RETURN for RUNE data (if present)
-    // if let Ok(op_return_script) = encode_rune_op_return(&out_rune) {
-    //     let op_return_txout = TxOut {
-    //         value: Amount::ZERO,
-    //         script_pubkey: op_return_script,
-    //     };
-    //     outputs.push(op_return_txout);
-    // }
+    if let Ok(op_return_script) = encode_rune_op_return(&out_rune) {
+        let op_return_txout = TxOut {
+            value: Amount::ZERO,
+            script_pubkey: op_return_script,
+        };
+        outputs.push(op_return_txout);
+    }
 
-    // Output 1: Change output (back to input address)
+    // Output 2: Change output (back to input address)
     let change_txout = TxOut {
         value: Amount::from_sat(change_amount),
         script_pubkey: input_script.clone(),
@@ -697,6 +692,7 @@ async fn fetch_fee_rate_from_btc_rpc(
 // Function to submit PSBT to orchestrator
 async fn submit_psbt_to_orchestrator(
     psbt: &Psbt,
+    intention: &DonateIntention,
     pool_address: &Address,
     nonce: u64,
     pool_spend: Utxo,
@@ -718,75 +714,43 @@ async fn submit_psbt_to_orchestrator(
                 e
             )))
         })?;
-
-    // Create an InvokeArgs struct based on did file
-    #[derive(CandidType, Serialize)]
-    struct InputCoin {
-        coin: CoinBalance,
-        from: String,
-    }
-
-    #[derive(CandidType, Serialize)]
-    struct OutputCoin {
-        to: String,
-        coin: CoinBalance,
-    }
-
-    #[derive(CandidType, Serialize)]
-    struct Intention {
-        input_coins: Vec<InputCoin>,
-        output_coins: Vec<OutputCoin>,
-        action: String,
-        exchange_id: String,
-        pool_utxo_spend: Vec<String>,
-        action_params: String,
-        nonce: u64,
-        pool_utxo_receive: Vec<String>,
-        pool_address: String,
-    }
-
-    #[derive(CandidType, Serialize)]
-    struct IntentionSet {
-        tx_fee_in_sats: u64,
-        initiator_address: String,
-        intentions: Vec<Intention>,
-    }
-
-    #[derive(CandidType, Serialize)]
-    struct InvokeArgs {
-        intention_set: IntentionSet,
-        psbt_hex: String,
-    }
-
     let txid = psbt.unsigned_tx.compute_txid();
     println!("PSBT txid: {}", txid.to_string());
-    // Create empty intention set
+    let mut coins = ree_types::CoinBalances::new();
+    coins.add_coin(&intention.out_rune);
+    let pool_received = ree_types::Utxo {
+        txid: ree_types::Txid::from_str(&txid.to_string()).expect("valid txid"),
+        vout: 0,
+        sats: intention.out_sats,
+        coins,
+    };
     let intention_set = IntentionSet {
         tx_fee_in_sats: fee,
         initiator_address: input_address.to_string(),
         intentions: vec![Intention {
+            exchange_id: "RICH_SWAP".to_string(),
+            action: "donate".to_string(),
+            action_params: "".to_string(),
             input_coins: vec![InputCoin {
                 coin: CoinBalance {
-                    id: "0:0".to_string(),
+                    id: CoinId::btc(),
                     value: 10000,
                 },
                 from: input_address.to_string(),
             }],
             output_coins: Vec::new(),
-            action: "donate".to_string(),
-            exchange_id: "RICH_SWAP".to_string(),
-            pool_utxo_spend: vec![format!("{}:{}", pool_spend.txid, pool_spend.vout)],
-            action_params: "".to_string(),
+            pool_utxo_spent: vec![format!("{}:{}", pool_spend.txid, pool_spend.vout)],
             nonce,
-            pool_utxo_receive: vec![format!("{}:0", txid.to_string())],
+            pool_utxo_received: vec![pool_received],
             pool_address: pool_address.to_string(),
         }],
     };
 
     // Create invoke args
-    let invoke_args = InvokeArgs {
+    let invoke_args = ree_types::orchestrator_interfaces::InvokeArgs {
         intention_set,
         psbt_hex,
+        initiator_utxo_proof: vec![],
     };
 
     // Encode the invoke_args
@@ -829,9 +793,8 @@ async fn submit_psbt_to_orchestrator(
 // Helper function to encode RUNE OP_RETURN
 fn encode_rune_op_return(coin_balance: &CoinBalance) -> Result<ScriptBuf> {
     use ordinals::varint;
-    let mut parts = coin_balance.id.split(':');
-    let block: u64 = parts.next().map(|s| s.parse().ok()).flatten().unwrap();
-    let tx: u32 = parts.next().map(|s| s.parse().ok()).flatten().unwrap();
+    let block = coin_balance.id.block;
+    let tx = coin_balance.id.tx;
     let mut rune_script_bytes = Vec::<u8>::new();
     varint::encode_to_vec(0, &mut rune_script_bytes); // tag::Body
     varint::encode_to_vec(block as u128, &mut rune_script_bytes); // block

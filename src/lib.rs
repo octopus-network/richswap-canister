@@ -25,7 +25,6 @@ use ree_types::{
 };
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -115,11 +114,11 @@ const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
 const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
 // deprecated
 const _POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
-const POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
+const _POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
 // the v3 is token -> addr
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(7);
 // the v3 is addr -> pool, notice: 6 is deprecated in the testnet
-const POOLS_MEMORY_ID: MemoryId = MemoryId::new(10);
+const POOLS_MEMORY_ID_V4: MemoryId = MemoryId::new(10);
 
 const BLOCKS_ID: MemoryId = MemoryId::new(8);
 const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
@@ -127,14 +126,19 @@ const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
 const WHITELIST_ID: MemoryId = MemoryId::new(11);
 const PAUSED_ID: MemoryId = MemoryId::new(12);
 
+const POOLS_MEMORY_ID: MemoryId = MemoryId::new(13);
+
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
 
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
 
-    static POOLS_V2: RefCell<StableBTreeMap<Pubkey, crate::migrate::LiquidityPoolV2, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
+    // static POOLS_V2: RefCell<StableBTreeMap<Pubkey, crate::migrate::LiquidityPoolV2, Memory>> =
+    //     RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
+
+    pub(crate) static POOLS_V4: RefCell<StableBTreeMap<String, migrate::LiquidityPoolV4, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V4))));
 
     pub(crate) static POOLS: RefCell<StableBTreeMap<String, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));
@@ -361,11 +365,7 @@ pub(crate) fn calculate_merge_utxos(utxos: &[Utxo], rune_id: CoinId) -> (u64, Co
         value: 0,
     };
     for utxo in utxos {
-        if let Some(rune) = &utxo.maybe_rune {
-            if rune.id == rune_id {
-                balance.value += rune.value;
-            }
-        }
+        balance.value += utxo.coins.value_of(&rune_id);
         sats += utxo.sats;
     }
     (sats, balance)
@@ -382,10 +382,10 @@ pub(crate) async fn get_untracked_utxos_of_pool(
     Ok(confirmed.values().cloned().collect::<Vec<_>>())
 }
 
-/// fetch utxos of pool from btc canister & rune indexer
+// fetch utxos of pool from btc canister & rune indexer
 pub(crate) async fn get_confirmed_utxos_of_pool(
     pool: &LiquidityPool,
-) -> Result<BTreeMap<String, Utxo>, ExchangeError> {
+) -> Result<std::collections::BTreeMap<String, Utxo>, ExchangeError> {
     cfg_if::cfg_if! {
         if #[cfg(feature = "testnet")] {
             let (btc_canister_id, indexer_id, network) =
@@ -412,7 +412,7 @@ pub(crate) async fn get_confirmed_utxos_of_pool(
             txid: Txid::from_bytes(utxo.outpoint.txid.as_slice())
                 .map_err(|_| ExchangeError::InvalidTxid)?,
             vout: utxo.outpoint.vout,
-            maybe_rune: None,
+            coins: ree_types::CoinBalances::new(),
             sats: utxo.value,
         });
     }
@@ -430,7 +430,7 @@ pub(crate) async fn get_confirmed_utxos_of_pool(
                     "UTXOs mismatch".to_string(),
                 ))?;
             for (i, utxo) in utxos.iter_mut().enumerate() {
-                utxo.maybe_rune = runes[i]
+                let maybe_rune = runes[i]
                     .as_ref()
                     .map(|rs| {
                         rs.iter()
@@ -442,6 +442,9 @@ pub(crate) async fn get_confirmed_utxos_of_pool(
                             .clone()
                     })
                     .flatten();
+                if let Some(rune) = maybe_rune {
+                    utxo.coins.add_coin(&rune);
+                }
             }
         }
         rune_indexer::Result_::Err(_) => {
@@ -476,6 +479,60 @@ pub fn get_edicts_in_tx(tx: &ree_types::bitcoin::Transaction) -> Result<Vec<Edic
         }
     }
     Ok(Vec::new())
+}
+
+pub(crate) fn construct_psbt(
+    initiator: impl AsRef<str>,
+    recepient: impl AsRef<str>,
+    utxos: &[Utxo],
+    fee_rate: u64,
+) -> Result<Psbt, ExchangeError> {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let sender = Address::from_str(initiator.as_ref()).unwrap().require_network(Network::Testnet4).unwrap();
+            let recepient = Address::from_str(recepient.as_ref()).unwrap().require_network(Network::Testnet4).unwrap();
+        } else {
+            let sender = Address::from_str(initiator.as_ref()).unwrap().require_network(Network::Bitcoin).unwrap();
+            let recepient = Address::from_str(recepient.as_ref()).unwrap().require_network(Network::Bitcoin).unwrap();
+        }
+    }
+    let inputs = utxos
+        .iter()
+        .map(|utxo| {
+            let txid = BtcTxid::from_str(&utxo.txid.to_string()).expect("invalid txid");
+            TxIn {
+                previous_output: OutPoint::new(txid, utxo.vout),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::default(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let total_sats = utxos.iter().map(|u| u.sats).sum::<u64>();
+    let tx = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: inputs,
+        output: vec![TxOut {
+            value: Amount::from_sat(total_sats),
+            script_pubkey: recepient.script_pubkey(),
+        }],
+    };
+    let mut psbt = Psbt::from_unsigned_tx(tx).expect("invalid psbt");
+
+    for (i, input) in psbt.inputs.iter_mut().enumerate() {
+        let witness_utxo = TxOut {
+            value: Amount::from_sat(utxos[i].sats),
+            script_pubkey: sender.script_pubkey(),
+        };
+        input.witness_utxo = Some(witness_utxo);
+    }
+    let fee = psbt.unsigned_tx.vsize() as u64 * fee_rate;
+    (total_sats > fee)
+        .then(|| ())
+        .ok_or(ExchangeError::InsufficientFunds)?;
+    psbt.unsigned_tx.output[0].value = Amount::from_sat(total_sats - fee);
+    Ok(psbt)
 }
 
 pub(crate) async fn fork_at_txid(

@@ -17,7 +17,9 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 #[post_upgrade]
-pub fn upgrade() {}
+pub fn upgrade() {
+    crate::migrate::migrate_to_v5();
+}
 
 #[update(guard = "ensure_owner")]
 pub fn set_fee_collector(addr: String) {
@@ -27,6 +29,27 @@ pub fn set_fee_collector(addr: String) {
 #[update(guard = "ensure_owner")]
 pub fn set_orchestrator(principal: Principal) {
     crate::set_orchestrator(principal);
+}
+
+#[update(guard = "ensure_owner")]
+pub fn set_donation_amount(
+    addr: String,
+    btc_amount: u64,
+    rune_amount: u128,
+) -> Result<(), ExchangeError> {
+    crate::with_pool_mut(addr, |p| {
+        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+        pool.states
+            .last_mut()
+            .ok_or(ExchangeError::EmptyPool)?
+            .total_btc_donation = btc_amount;
+        pool.states
+            .last_mut()
+            .ok_or(ExchangeError::EmptyPool)?
+            .total_rune_donation = rune_amount;
+        Ok(Some(pool))
+    })?;
+    Ok(())
 }
 
 #[query]
@@ -130,21 +153,6 @@ pub struct UtxoToBeMerge {
     pub nonce: u64,
     pub out_sats: u64,
     pub out_rune: CoinBalance,
-}
-
-#[update]
-pub async fn pre_sync_with_btc(addr: String) -> Result<UtxoToBeMerge, ExchangeError> {
-    crate::ensure_online()?;
-    let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
-    let utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
-    let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
-    let (out_sats, out_rune) = crate::calculate_merge_utxos(&utxos, pool.meta.id);
-    Ok(UtxoToBeMerge {
-        utxos,
-        nonce: state.nonce,
-        out_sats,
-        out_rune,
-    })
 }
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -255,7 +263,7 @@ pub fn list_pools(from: Option<String>, limit: usize) -> Vec<PoolInfo> {
                 .map(|s| {
                     vec![CoinBalance {
                         id: p.meta.id,
-                        value: s.rune_supply() as u128,
+                        value: s.rune_supply(&p.meta.id) as u128,
                     }]
                 })
                 .unwrap_or(vec![CoinBalance {
@@ -390,7 +398,7 @@ pub fn get_pool_info(args: GetPoolInfoArgs) -> GetPoolInfoResponse {
             .map(|s| {
                 vec![CoinBalance {
                     id: p.meta.id,
-                    value: s.rune_supply() as u128,
+                    value: s.rune_supply(&p.meta.id) as u128,
                 }]
             })
             .unwrap_or_default(),
@@ -551,8 +559,8 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         action_params,
         pool_address,
         nonce,
-        pool_utxo_spend,
-        pool_utxo_receive,
+        pool_utxo_spent,
+        pool_utxo_received,
         input_coins,
         output_coins,
     } = intention;
@@ -565,8 +573,8 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                 .validate_adding_liquidity(
                     txid,
                     nonce,
-                    pool_utxo_spend,
-                    pool_utxo_receive,
+                    pool_utxo_spent,
+                    pool_utxo_received,
                     input_coins,
                     output_coins,
                     initiator,
@@ -589,8 +597,8 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                 .validate_withdrawing_liquidity(
                     txid,
                     nonce,
-                    pool_utxo_spend,
-                    pool_utxo_receive,
+                    pool_utxo_spent,
+                    pool_utxo_received,
                     action_params
                         .parse()
                         .map_err(|_| "action params \"share\" required")?,
@@ -614,8 +622,8 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                 .validate_extract_fee(
                     txid,
                     nonce,
-                    pool_utxo_spend,
-                    pool_utxo_receive,
+                    pool_utxo_spent,
+                    pool_utxo_received,
                     input_coins,
                     output_coins,
                 )
@@ -635,8 +643,8 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                 .validate_swap(
                     txid,
                     nonce,
-                    pool_utxo_spend,
-                    pool_utxo_receive,
+                    pool_utxo_spent,
+                    pool_utxo_received,
                     input_coins,
                     output_coins,
                 )
@@ -654,11 +662,10 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         "donate" => {
             let (new_state, consumed) = pool
                 .validate_donate(
-                    &psbt,
                     txid,
                     nonce,
-                    pool_utxo_spend,
-                    pool_utxo_receive,
+                    pool_utxo_spent,
+                    pool_utxo_received,
                     input_coins,
                     output_coins,
                 )
@@ -673,25 +680,6 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             })
             .map_err(|e| e.to_string())?;
         }
-        // "sync" => {
-        //     let mut utxos = crate::get_untracked_utxos_of_pool(&pool)
-        //         .await
-        //         .map_err(|e| e.to_string())?;
-        //     let new_state = pool
-        //         .validate_merge_utxos(&psbt, txid, nonce, &mut utxos, initiator)
-        //         .map_err(|e| e.to_string())?;
-        //     for utxo in utxos {
-        //         crate::psbt::sign(&mut psbt, &utxo, pool.base_id().to_bytes())
-        //             .await
-        //             .map_err(|e| e.to_string())?;
-        //     }
-        //     crate::with_pool_mut(pool_address, |p| {
-        //         let mut pool = p.expect("already checked;qed");
-        //         pool.commit(new_state);
-        //         Ok(Some(pool))
-        //     })
-        //     .map_err(|e| e.to_string())?;
-        // }
         _ => {
             return Err("invalid method".to_string());
         }
@@ -748,6 +736,23 @@ pub fn query_blocks() -> Result<Vec<BlockInfo>, String> {
     });
 
     Ok(res)
+}
+
+#[update(guard = "ensure_guardian")]
+pub async fn sync_with_btc(addr: String, fee_rate: u64) -> Result<Txid, ExchangeError> {
+    let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
+    let utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
+    let new_state = pool.merge_utxos(&utxos, fee_rate).await?;
+    let txid = new_state
+        .id
+        .map(|v| v.clone())
+        .expect("already checked;qed");
+    crate::with_pool_mut(addr, |p| {
+        let mut pool = p.expect("already checked;qed");
+        pool.commit(new_state);
+        Ok(Some(pool))
+    })?;
+    Ok(txid)
 }
 
 #[update(guard = "ensure_guardian")]
