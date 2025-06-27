@@ -17,9 +17,7 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 #[post_upgrade]
-pub fn upgrade() {
-    crate::migrate::migrate_to_v5();
-}
+pub fn upgrade() {}
 
 #[update(guard = "ensure_owner")]
 pub fn set_fee_collector(addr: String) {
@@ -145,6 +143,39 @@ pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
             crate::create_empty_pool(meta, untweaked_pubkey.clone())
         }
     }
+}
+
+#[query]
+pub fn query_pool(rune_id: CoinId) -> Result<PoolInfo, ExchangeError> {
+    crate::ensure_online()?;
+    crate::with_pool_name(&rune_id)
+        .and_then(|addr| crate::find_pool(&addr))
+        .map(|p| PoolInfo {
+            key: p.pubkey.clone(),
+            name: p.meta.symbol.clone(),
+            key_derivation_path: vec![p.meta.id.to_bytes()],
+            address: p.addr.clone(),
+            nonce: p.states.last().map(|s| s.nonce).unwrap_or_default(),
+            btc_reserved: p.states.last().map(|s| s.btc_supply()).unwrap_or_default(),
+            coin_reserved: p
+                .states
+                .last()
+                .map(|s| {
+                    vec![CoinBalance {
+                        id: p.meta.id,
+                        value: s.rune_supply(&p.meta.id) as u128,
+                    }]
+                })
+                .unwrap_or_default(),
+            utxos: p
+                .states
+                .last()
+                .and_then(|s| s.utxo.clone())
+                .map(|utxo| vec![utxo])
+                .unwrap_or_default(),
+            attributes: p.attrs(),
+        })
+        .ok_or(ExchangeError::InvalidPool)
 }
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -565,6 +596,9 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         output_coins,
     } = intention;
     let pool_addr = pool_address.clone();
+
+    let _guard = crate::ExecuteTxGuard::new(pool_addr.clone())
+        .ok_or(format!("Pool {0} Executing", pool_addr).to_string())?;
     let pool = crate::with_pool(&pool_address, |p| p.clone())
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {

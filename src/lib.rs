@@ -25,6 +25,7 @@ use ree_types::{
 };
 use serde::Serialize;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -171,6 +172,8 @@ thread_local! {
 
     pub(crate) static PAUSED: RefCell<Cell<bool, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(PAUSED_ID)), false).expect("fail to init a StableCell"));
+
+    pub(crate) static GUARDS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -634,4 +637,27 @@ pub async fn send_transaction(tx: &Transaction) -> Result<(), String> {
         ic_cdk::println!("send_transaction error: code = {:?}, msg = {}", code, msg);
     })
     .map_err(|(_, msg)| msg.clone())
+}
+
+#[must_use]
+pub struct ExecuteTxGuard(String);
+
+impl ExecuteTxGuard {
+    pub fn new(pool_address: String) -> Option<Self> {
+        GUARDS.with(|guards| {
+            if guards.borrow().contains(&pool_address) {
+                return None;
+            }
+            guards.borrow_mut().insert(pool_address.clone());
+            return Some(ExecuteTxGuard(pool_address));
+        })
+    }
+}
+
+impl Drop for ExecuteTxGuard {
+    fn drop(&mut self) {
+        GUARDS.with_borrow_mut(|guards| {
+            guards.remove(&self.0);
+        });
+    }
 }
