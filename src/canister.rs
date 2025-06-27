@@ -596,6 +596,9 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         output_coins,
     } = intention;
     let pool_addr = pool_address.clone();
+
+    let _guard = crate::ExecuteTxGuard::new(pool_addr.clone())
+        .ok_or(format!("Pool {0} Executing", pool_addr).to_string())?;
     let pool = crate::with_pool(&pool_address, |p| p.clone())
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
