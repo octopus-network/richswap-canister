@@ -1,5 +1,4 @@
 mod canister;
-mod migrate;
 mod pool;
 mod psbt;
 mod reorg;
@@ -109,6 +108,12 @@ pub enum ExchangeError {
     PriceImpactLimitExceeded,
     #[error("Funds limit exceeded")]
     FundsLimitExceeded,
+    #[error("Liquidity locked")]
+    LiquidityLocked,
+    #[error("invalid bip-322 signature")]
+    InvalidSignature,
+    #[error("invalid lock message")]
+    InvalidLockMessage,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -122,6 +127,7 @@ const _POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
 // the v3 is token -> addr
 const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(7);
 // the v3 is addr -> pool, notice: 6 is deprecated in the testnet
+#[allow(unused)]
 const POOLS_MEMORY_ID_V4: MemoryId = MemoryId::new(10);
 
 const BLOCKS_ID: MemoryId = MemoryId::new(8);
@@ -141,8 +147,8 @@ thread_local! {
     // static POOLS_V2: RefCell<StableBTreeMap<Pubkey, crate::migrate::LiquidityPoolV2, Memory>> =
     //     RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
 
-    pub(crate) static POOLS_V4: RefCell<StableBTreeMap<String, migrate::LiquidityPoolV4, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V4))));
+    // pub(crate) static POOLS_V4: RefCell<StableBTreeMap<String, migrate::LiquidityPoolV4, Memory>> =
+    //     RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V4))));
 
     pub(crate) static POOLS: RefCell<StableBTreeMap<String, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));
@@ -680,4 +686,8 @@ impl Drop for ExecuteTxGuard {
             guards.remove(&self.0);
         });
     }
+}
+
+pub(crate) fn ic_timestamp() -> u64 {
+    ic_cdk::api::time() / 1_000_000_000
 }

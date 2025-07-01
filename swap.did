@@ -18,7 +18,9 @@ type ExchangeError = variant {
   PriceImpactLimitExceeded;
   RuneIndexerError : text;
   PoolStateExpired : nat64;
+  InvalidSignature;
   TooSmallFunds;
+  LiquidityLocked;
   InvalidRuneId;
   InvalidPool;
   InvalidPsbt : text;
@@ -26,6 +28,7 @@ type ExchangeError = variant {
   InvalidTxid;
   InvalidLiquidity;
   EmptyPool;
+  InvalidLockMessage;
   FetchBitcoinCanisterError;
   LpNotFound;
   NoConfirmedUtxos;
@@ -107,6 +110,7 @@ type PoolState = record {
   incomes : nat64;
   total_btc_donation : nat64;
   nonce : nat64;
+  lp_locks : vec record { text; nat64 };
 };
 type Result = variant { Ok : record { nat64; nat64 }; Err : text };
 type Result_1 = variant { Ok : text; Err : ExchangeError };
@@ -168,6 +172,7 @@ service : {
   get_pool_state_chain : (text, text) -> (Result_6) query;
   get_tx_affected : (text) -> (opt TxRecord) query;
   list_pools : (opt text, nat64) -> (vec PoolInfo) query;
+  lock_lp : (text, text, text) -> (Result_2);
   new_block : (NewBlockInfo) -> (Result_7);
   pause : () -> ();
   pre_add_liquidity : (text, CoinBalance) -> (Result_8) query;

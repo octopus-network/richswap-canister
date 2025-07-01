@@ -79,6 +79,34 @@ pub fn recover() {
     });
 }
 
+#[update]
+pub fn lock_lp(addr: String, message: String, sig: String) -> Result<(), ExchangeError> {
+    crate::ensure_online()?;
+    bip322::verify_simple_encoded(&addr, &message, &sig)
+        .map_err(|_| ExchangeError::InvalidSignature)?;
+    let lock: Vec<&str> = message.split(':').collect();
+    let pool = lock.get(0).ok_or(ExchangeError::InvalidLockMessage)?;
+    let lock_until = lock
+        .get(1)
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or(ExchangeError::InvalidLockMessage)?;
+    crate::with_pool_mut(pool.to_string(), |p| {
+        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+        let state = pool.states.last_mut().ok_or(ExchangeError::EmptyPool)?;
+        state
+            .lp_locks
+            .entry(addr.clone())
+            .and_modify(|t| {
+                if *t < lock_until {
+                    *t = lock_until;
+                }
+            })
+            .or_insert(lock_until);
+        Ok(Some(pool))
+    })?;
+    Ok(())
+}
+
 #[query]
 pub fn get_pool_state_chain(
     addr: String,
@@ -355,7 +383,8 @@ pub fn pre_withdraw_liquidity(
     crate::ensure_online()?;
     crate::with_pool(&pool_addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let (btc, rune_output, _) = pool.available_to_withdraw(&user_addr, share)?;
+        let (btc, rune_output, _) =
+            pool.available_to_withdraw(&user_addr, share, crate::ic_timestamp())?;
         let state = pool.states.last().expect("already checked");
         Ok(WithdrawalOffer {
             input: state.utxo.clone().expect("already checked"),
