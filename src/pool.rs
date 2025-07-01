@@ -74,6 +74,8 @@ pub struct PoolState {
     pub lp_earnings: BTreeMap<String, u64>,
     pub total_btc_donation: u64,
     pub total_rune_donation: u128,
+    #[serde(default)]
+    pub lp_locks: BTreeMap<String, u64>,
 }
 
 impl PoolState {
@@ -455,8 +457,17 @@ impl LiquidityPool {
         &self,
         pubkey_hash: impl AsRef<str>,
         share: u128,
+        now: u64,
     ) -> Result<(u64, CoinBalance, u128), ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let lock_until = recent_state
+            .lp_locks
+            .get(pubkey_hash.as_ref())
+            .map(|v| *v)
+            .unwrap_or(0);
+        (lock_until < now)
+            .then(|| ())
+            .ok_or(ExchangeError::LiquidityLocked)?;
         let user_total_share = recent_state.lp(pubkey_hash.as_ref());
         (share <= user_total_share)
             .then(|| ())
@@ -560,7 +571,7 @@ impl LiquidityPool {
             .map_err(|_| ExchangeError::Overflow)?;
 
         let (btc_expecting, rune_expecting, new_share) =
-            self.available_to_withdraw(&initiator, share)?;
+            self.available_to_withdraw(&initiator, share, crate::ic_timestamp())?;
         (rune_expecting == rune_output && btc_expecting == btc_output_sats)
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
@@ -598,6 +609,7 @@ impl LiquidityPool {
         };
         state.utxo = new_utxo;
         state.k -= share;
+        state.lp_locks.remove(&initiator);
         if state.utxo.is_none() {
             state.incomes = 0;
             state.lp.clear();
