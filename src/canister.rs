@@ -20,9 +20,7 @@ use std::str::FromStr;
 pub fn upgrade() {}
 
 #[update(guard = "ensure_owner")]
-pub fn set_fee_collector(addr: String) {
-    crate::set_fee_collector(addr);
-}
+pub fn set_fee_collector(_addr: String) {}
 
 #[update(guard = "ensure_owner")]
 pub fn set_orchestrator(principal: Principal) {
@@ -45,6 +43,21 @@ pub fn set_donation_amount(
             .last_mut()
             .ok_or(ExchangeError::EmptyPool)?
             .total_rune_donation = rune_amount;
+        Ok(Some(pool))
+    })?;
+    Ok(())
+}
+
+#[update(guard = "ensure_owner")]
+pub fn donate_protocol_revenue() -> Result<(), ExchangeError> {
+    crate::ensure_online()?;
+    let fee_collector = crate::get_fee_collector();
+    crate::with_pool_mut(fee_collector, |p| {
+        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+        if pool.states.is_empty() {
+            return Err(ExchangeError::EmptyPool);
+        }
+        pool.merge_protocol_revenue()?;
         Ok(Some(pool))
     })?;
     Ok(())
@@ -652,6 +665,31 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             .map_err(|e| e.to_string())?;
         }
         "extract_protocol_fee" => {
+            // enforce combination
+            (intention_index == 0)
+                .then(|| ())
+                .ok_or("intention_index must be 0 for extract_protocol_fee".to_string())?;
+            (intention_set.intentions.len() == 2).then(|| ()).ok_or(
+                "intention_set must contain 2 intentions for extract_protocol_fee".to_string(),
+            )?;
+            let Intention {
+                exchange_id: _,
+                action: action_combined,
+                action_params: _,
+                pool_address: maybe_target,
+                nonce: _,
+                pool_utxo_spent: _,
+                pool_utxo_received: _,
+                input_coins: _,
+                output_coins: _,
+            } = &intention_set.intentions[1];
+            (action_combined == "donate")
+                .then(|| ())
+                .ok_or("second intention must be donate".to_string())?;
+            (maybe_target == &crate::get_fee_collector())
+                .then(|| ())
+                .ok_or("second intention must be in the same pool".to_string())?;
+
             let (new_state, consumed) = pool
                 .validate_extract_fee(
                     txid,
