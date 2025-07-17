@@ -154,7 +154,7 @@ type WithdrawalOffer = record {
 service : {
   blocks_tx_records_count : () -> (Result) query;
   create : (text) -> (Result_1);
-  donate_protocol_revenue : () -> (Result_2);
+  donate_rich_protocol_revenue : () -> (Result_2);
   escape_hatch : (text, text, nat64) -> (Result_3);
   execute_tx : (ExecuteTxArgs) -> (Result_3);
   get_all_lp : (text) -> (Result_4) query;
@@ -181,7 +181,6 @@ service : {
   recover : () -> ();
   rollback_tx : (RollbackTxArgs) -> (Result_7);
   set_donation_amount : (text, nat64, nat) -> (Result_2);
-  set_fee_collector : (text) -> ();
   set_orchestrator : (principal) -> ();
   sync_with_btc : (text, nat64) -> (Result_1);
 }

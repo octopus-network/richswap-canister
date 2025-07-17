@@ -728,7 +728,10 @@ impl LiquidityPool {
         Ok((state, prev_utxo))
     }
 
-    pub(crate) fn merge_protocol_revenue(&mut self) -> Result<(), ExchangeError> {
+    pub(crate) fn merge_rich_protocol_revenue(&mut self) -> Result<(), ExchangeError> {
+        if self.addr != crate::get_fee_collector() {
+            return Err(ExchangeError::InvalidPool);
+        }
         let rune_id = self.base_id();
         let recent_state = self.states.last_mut().ok_or(ExchangeError::EmptyPool)?;
         let new_k = crate::sqrt(

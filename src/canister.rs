@@ -20,9 +20,6 @@ use std::str::FromStr;
 pub fn upgrade() {}
 
 #[update(guard = "ensure_owner")]
-pub fn set_fee_collector(_addr: String) {}
-
-#[update(guard = "ensure_owner")]
 pub fn set_orchestrator(principal: Principal) {
     crate::set_orchestrator(principal);
 }
@@ -49,7 +46,7 @@ pub fn set_donation_amount(
 }
 
 #[update(guard = "ensure_owner")]
-pub fn donate_protocol_revenue() -> Result<(), ExchangeError> {
+pub fn donate_rich_protocol_revenue() -> Result<(), ExchangeError> {
     crate::ensure_online()?;
     let fee_collector = crate::get_fee_collector();
     crate::with_pool_mut(fee_collector, |p| {
@@ -57,7 +54,7 @@ pub fn donate_protocol_revenue() -> Result<(), ExchangeError> {
         if pool.states.is_empty() {
             return Err(ExchangeError::EmptyPool);
         }
-        pool.merge_protocol_revenue()?;
+        pool.merge_rich_protocol_revenue()?;
         Ok(Some(pool))
     })?;
     Ok(())
@@ -688,7 +685,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                 .ok_or("second intention must be donate".to_string())?;
             (maybe_target == &crate::get_fee_collector())
                 .then(|| ())
-                .ok_or("second intention must be in the same pool".to_string())?;
+                .ok_or("second intention must be the HOPE_YOU_GET_RICH pool".to_string())?;
 
             let (new_state, consumed) = pool
                 .validate_extract_fee(
