@@ -288,7 +288,7 @@ impl LiquidityPool {
             ))
         }?;
         // check minimal liquidity
-        (btc_input.value >= MIN_BTC_VALUE as u128)
+        (btc_input.value >= crate::min_sats() as u128)
             .then(|| ())
             .ok_or(ExchangeError::TooSmallFunds)?;
         // y = f(x), x' = f(y'); => x == x' || y == y'
@@ -357,7 +357,7 @@ impl LiquidityPool {
     pub(crate) fn available_to_extract(&self) -> Result<u64, ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         // ensure the incomes could be extracted
-        (recent_state.incomes >= CoinMeta::btc().min_amount as u64)
+        (recent_state.incomes >= crate::min_sats())
             .then(|| ())
             .ok_or(ExchangeError::TooSmallFunds)?;
         let btc_supply = recent_state.btc_supply();
@@ -550,7 +550,7 @@ impl LiquidityPool {
                 "pool_utxo_spend/pool_state don't match".to_string(),
             ))?;
         // check minial sats
-        (btc_output.value >= MIN_BTC_VALUE as u128)
+        (btc_output.value >= crate::min_sats() as u128)
             .then(|| ())
             .ok_or(ExchangeError::TooSmallFunds)?;
         // check params
@@ -618,7 +618,7 @@ impl LiquidityPool {
         &self,
         input_sats: u64,
     ) -> Result<(CoinBalance, u64), ExchangeError> {
-        (input_sats >= MIN_BTC_VALUE as u64)
+        (input_sats >= crate::min_sats())
             .then(|| ())
             .ok_or(ExchangeError::TooSmallFunds)?;
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
@@ -691,31 +691,6 @@ impl LiquidityPool {
                 "input coin must be BTC".to_string(),
             ))?;
         let (out_rune, out_sats) = self.wish_to_donate(input.coin.value as u64)?;
-        // let maybe_pool_output = &psbt.unsigned_tx.output[0];
-        // maybe_pool_output
-        //     .script_pubkey
-        //     .is_p2tr()
-        //     .then(|| ())
-        //     .ok_or(ExchangeError::InvalidPsbt(
-        //         "pool output must be p2tr".to_string(),
-        //     ))?;
-        // cfg_if::cfg_if! {
-        //     if #[cfg(feature = "testnet")] {
-        //         let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Testnet4).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
-        //     } else {
-        //         let recv_address = Address::from_script(&maybe_pool_output.script_pubkey, Network::Bitcoin).map_err(|_| ExchangeError::InvalidPsbt("pool output not found".to_string()))?;
-        //     }
-        // }
-        // (self.addr == recv_address.to_string())
-        //     .then(|| ())
-        //     .ok_or(ExchangeError::InvalidPsbt(
-        //         "pool output not found".to_string(),
-        //     ))?;
-        // for output in &psbt.unsigned_tx.output {
-        //     (!output.script_pubkey.is_op_return()).then(|| ()).ok_or(
-        //         ExchangeError::InvalidPsbt("Outputs should not contain OP_RETURN".to_string()),
-        //     )?;
-        // }
         let pool_output = pool_utxo_receive.last().map(|s| s.clone()).ok_or(
             ExchangeError::InvalidSignPsbtArgs("pool_utxo_receive not found".to_string()),
         )?;
@@ -751,6 +726,34 @@ impl LiquidityPool {
         state.total_btc_donation += input.coin.value as u64;
         state.utxo = Some(pool_output);
         Ok((state, prev_utxo))
+    }
+
+    pub(crate) fn merge_rich_protocol_revenue(&mut self) -> Result<(), ExchangeError> {
+        if self.addr != crate::get_fee_collector() {
+            return Err(ExchangeError::InvalidPool);
+        }
+        let rune_id = self.base_id();
+        let recent_state = self.states.last_mut().ok_or(ExchangeError::EmptyPool)?;
+        let new_k = crate::sqrt(
+            recent_state.rune_supply(&rune_id)
+                * (recent_state.incomes + recent_state.btc_supply()) as u128,
+        );
+        let mut new_lp = BTreeMap::new();
+        for (lp, share) in recent_state.lp.iter() {
+            new_lp.insert(
+                lp.clone(),
+                share
+                    .checked_mul(new_k)
+                    .and_then(|mul| mul.checked_div(recent_state.k))
+                    .ok_or(ExchangeError::Overflow)?,
+            );
+        }
+        let k_adjust = new_lp.values().sum();
+        recent_state.k = k_adjust;
+        recent_state.lp = new_lp;
+        recent_state.total_btc_donation += recent_state.incomes;
+        recent_state.incomes = 0;
+        Ok(())
     }
 
     fn ensure_price_limit(
@@ -923,7 +926,7 @@ impl LiquidityPool {
                 .value
                 .try_into()
                 .map_err(|_| ExchangeError::Overflow)?;
-            (input_btc >= MIN_BTC_VALUE)
+            (input_btc >= crate::min_sats())
                 .then(|| ())
                 .ok_or(ExchangeError::TooSmallFunds)?;
             // assume the user inputs were valid
@@ -939,7 +942,7 @@ impl LiquidityPool {
                 .value
                 .try_into()
                 .map_err(|_| ExchangeError::Overflow)?;
-            (output_btc >= MIN_BTC_VALUE)
+            (output_btc >= crate::min_sats())
                 .then(|| ())
                 .ok_or(ExchangeError::TooSmallFunds)?;
             (

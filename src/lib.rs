@@ -35,9 +35,12 @@ pub const TESTNET_RUNE_INDEXER_CANISTER: &'static str = "f2dwm-caaaa-aaaao-qjxlq
 pub const BTC_CANISTER: &'static str = "ghsi2-tqaaa-aaaan-aaaca-cai";
 pub const TESTNET_BTC_CANISTER: &'static str = "g4xu7-jiaaa-aaaan-aaaaq-cai";
 pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
+// to HOPE_YOU_GET_RICH
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
-    "bc1pccdfsdaqk23eszu37jsr494hqcvccg2fkkfkpskk6a84xxyawtsqwxy9q0";
-pub const DEFAULT_TEST_FEE_COLLECTOR: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
+    "bc1ptnxf8aal3apeg8r4zysr6k2mhadg833se2dm4nssl7drjlqdh2jqa4tk3p";
+// to THIS_IS_FIRST_RUNE
+pub const DEFAULT_TEST_FEE_COLLECTOR: &'static str =
+    "tb1pfr420a6qr8t00xwjyfz7x4lg2ppdqnnm3n7gk8x4q4qra93wx88qpam69j";
 pub const SAFE_HOURSE_ADDRESS: &'static str =
     "bc1pjn7c3ukkquyzmdugfwcyusdgd9rxht6txgeq93ypqxrg4essqydse5d7c5";
 pub const TESTNET_SAFE_HOURSE_ADDRESS: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";
@@ -330,9 +333,16 @@ pub(crate) fn ensure_online() -> Result<(), ExchangeError> {
 }
 
 pub(crate) fn get_fee_collector() -> String {
-    FEE_COLLECTOR.with(|f| f.borrow().get().clone())
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            crate::DEFAULT_TEST_FEE_COLLECTOR.to_string()
+        } else {
+            crate::DEFAULT_FEE_COLLECTOR.to_string()
+        }
+    }
 }
 
+#[allow(dead_code)]
 pub(crate) fn set_fee_collector(addr: String) {
     let _ = FEE_COLLECTOR.with(|f| f.borrow_mut().set(addr));
 }
@@ -637,6 +647,16 @@ pub async fn send_transaction(tx: &Transaction) -> Result<(), String> {
         ic_cdk::println!("send_transaction error: code = {:?}, msg = {}", code, msg);
     })
     .map_err(|(_, msg)| msg.clone())
+}
+
+pub(crate) fn min_sats() -> u64 {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            546
+        } else {
+            pool::MIN_BTC_VALUE
+        }
+    }
 }
 
 #[must_use]
