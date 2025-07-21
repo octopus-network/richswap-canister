@@ -474,7 +474,7 @@ impl LiquidityPool {
             .checked_mul(btc_supply as u128)
             .and_then(|m| m.checked_div(recent_state.k))
             .ok_or(ExchangeError::EmptyPool)?;
-        (btc_delta <= crate::min_sats() as u128)
+        (btc_delta <= MAX_BTC_VALUE as u128)
             .then(|| ())
             .ok_or(ExchangeError::FundsLimitExceeded)?;
         let btc_remains = recent_state
