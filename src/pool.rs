@@ -728,6 +728,76 @@ impl LiquidityPool {
         Ok((state, prev_utxo))
     }
 
+    pub(crate) fn validate_self_donate(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<Utxo>,
+    ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
+        let mut state = self
+            .states
+            .last()
+            .cloned()
+            .ok_or(ExchangeError::EmptyPool)?;
+        // check nonce
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        let prev_outpoint =
+            pool_utxo_spend
+                .last()
+                .map(|s| s.clone())
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_spend not found".to_string(),
+                ))?;
+        let prev_utxo = state.utxo.clone().ok_or(ExchangeError::EmptyPool)?;
+        (prev_outpoint == prev_utxo.outpoint()).then(|| ()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
+        )?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
+        let donate_amount = state.incomes;
+        let out_rune = state.rune_supply(&self.base_id());
+        let out_sats = state.satoshis();
+        let pool_output = pool_utxo_receive.last().map(|s| s.clone()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_receive not found".to_string()),
+        )?;
+        (pool_output.sats == out_sats && pool_output.coins.value_of(&self.base_id()) == out_rune)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive mismatch with pre_self_donate".to_string(),
+            ))?;
+        let new_k = crate::sqrt(out_rune * out_sats as u128);
+        let mut new_lp = BTreeMap::new();
+        for (lp, share) in state.lp.iter() {
+            new_lp.insert(
+                lp.clone(),
+                share
+                    .checked_mul(new_k)
+                    .and_then(|mul| mul.checked_div(state.k))
+                    .ok_or(ExchangeError::Overflow)?,
+            );
+        }
+        let k_adjust = new_lp.values().sum();
+        state.id = Some(txid);
+        state.nonce += 1;
+        state.k = k_adjust;
+        state.lp = new_lp;
+        state.incomes = 0;
+        state.total_btc_donation += donate_amount;
+        state.utxo = Some(pool_output);
+        Ok((state, prev_utxo))
+    }
+
     pub(crate) fn merge_rich_protocol_revenue(&mut self) -> Result<(), ExchangeError> {
         if self.addr != crate::get_fee_collector() {
             return Err(ExchangeError::InvalidPool);
