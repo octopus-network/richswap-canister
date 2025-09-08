@@ -173,6 +173,7 @@ service : {
   pre_add_liquidity : (text, CoinBalance) -> (Result_8) query;
   pre_donate : (text, nat64) -> (Result_9) query;
   pre_extract_fee : (text) -> (Result_10) query;
+  pre_self_donate : () -> (Result_9) query;
   pre_swap : (text, CoinBalance) -> (Result_11) query;
   pre_withdraw_liquidity : (text, text, nat) -> (Result_12) query;
   query_blocks : () -> (Result_13) query;
