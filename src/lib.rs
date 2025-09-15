@@ -38,9 +38,9 @@ pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
 // to HOPE_YOU_GET_RICH
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "bc1ptnxf8aal3apeg8r4zysr6k2mhadg833se2dm4nssl7drjlqdh2jqa4tk3p";
-// to THIS_IS_FIRST_RUNE
 pub const DEFAULT_TEST_FEE_COLLECTOR: &'static str =
-    "tb1pfr420a6qr8t00xwjyfz7x4lg2ppdqnnm3n7gk8x4q4qra93wx88qpam69j";
+    "tb1puzk3gn4z3rrjjnrhlgk5yvts8ejs0j2umazpcc4anq62wfk00e6ssw9p0n";
+
 pub const SAFE_HOURSE_ADDRESS: &'static str =
     "bc1pjn7c3ukkquyzmdugfwcyusdgd9rxht6txgeq93ypqxrg4essqydse5d7c5";
 pub const TESTNET_SAFE_HOURSE_ADDRESS: &'static str = "tb1quxq04y0weveggvrk6vrl5v4l44uknwpw7x2cjf";

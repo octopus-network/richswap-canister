@@ -218,6 +218,23 @@ pub async fn pre_donate(pool: String, input_sats: u64) -> Result<DonateIntention
     })
 }
 
+#[query]
+pub fn pre_self_donate() -> Result<DonateIntention, ExchangeError> {
+    crate::ensure_online()?;
+    let receiver = crate::get_fee_collector();
+    let pool = crate::with_pool(&receiver, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
+    let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
+    Ok(DonateIntention {
+        input: state.utxo.clone().ok_or(ExchangeError::EmptyPool)?,
+        nonce: state.nonce,
+        out_rune: CoinBalance {
+            id: pool.meta.id,
+            value: state.rune_supply(&pool.meta.id),
+        },
+        out_sats: state.satoshis(),
+    })
+}
+
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExtractFeeOffer {
     pub input: Utxo,
@@ -738,6 +755,20 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                     input_coins,
                     output_coins,
                 )
+                .map_err(|e| e.to_string())?;
+            crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
+            crate::with_pool_mut(pool_address, |p| {
+                let mut pool = p.expect("already checked in pre_swap;qed");
+                pool.commit(new_state);
+                Ok(Some(pool))
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        "self_donate" => {
+            let (new_state, consumed) = pool
+                .validate_self_donate(txid, nonce, pool_utxo_spent, pool_utxo_received)
                 .map_err(|e| e.to_string())?;
             crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
                 .await
