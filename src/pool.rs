@@ -351,7 +351,6 @@ impl LiquidityPool {
                 .block_height
                 .checked_add(lock_time)
                 .unwrap_or(u32::MAX);
-            state.utxo = Some(pool_output);
             state
                 .lp_locks
                 .entry(initiator.clone())
@@ -362,6 +361,7 @@ impl LiquidityPool {
                 })
                 .or_insert(lock_until);
         }
+        state.utxo = Some(pool_output);
         state
             .lp
             .entry(initiator)
