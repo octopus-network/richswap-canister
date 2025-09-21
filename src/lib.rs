@@ -114,6 +114,8 @@ pub enum ExchangeError {
     InvalidSignature,
     #[error("invalid lock message")]
     InvalidLockMessage,
+    #[error("operation is forbidden during synching blocks")]
+    BlockSyncing,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -686,8 +688,4 @@ impl Drop for ExecuteTxGuard {
             guards.remove(&self.0);
         });
     }
-}
-
-pub(crate) fn ic_timestamp() -> u64 {
-    ic_cdk::api::time() / 1_000_000_000
 }

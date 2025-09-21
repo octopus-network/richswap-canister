@@ -75,7 +75,7 @@ pub struct PoolState {
     pub total_btc_donation: u64,
     pub total_rune_donation: u128,
     #[serde(default)]
-    pub lp_locks: BTreeMap<String, u64>,
+    pub lp_locks: BTreeMap<String, u32>,
 }
 
 impl PoolState {
@@ -246,6 +246,7 @@ impl LiquidityPool {
         &self,
         txid: Txid,
         nonce: u64,
+        lock_time: u32,
         pool_utxo_spend: Vec<String>,
         pool_utxo_receive: Vec<Utxo>,
         input_coins: Vec<InputCoin>,
@@ -344,7 +345,23 @@ impl LiquidityPool {
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "pool_utxo_receive mismatch with pre_add_liquidity".to_string(),
             ))?;
-        state.utxo = Some(pool_output);
+        if lock_time > 0 {
+            let max_block = crate::get_max_block().ok_or(ExchangeError::BlockSyncing)?;
+            let lock_until = max_block
+                .block_height
+                .checked_add(lock_time)
+                .unwrap_or(u32::MAX);
+            state.utxo = Some(pool_output);
+            state
+                .lp_locks
+                .entry(initiator.clone())
+                .and_modify(|t| {
+                    if *t < lock_until {
+                        *t = lock_until;
+                    }
+                })
+                .or_insert(lock_until);
+        }
         state
             .lp
             .entry(initiator)
@@ -457,7 +474,7 @@ impl LiquidityPool {
         &self,
         pubkey_hash: impl AsRef<str>,
         share: u128,
-        now: u64,
+        now: u32,
     ) -> Result<(u64, CoinBalance, u128), ExchangeError> {
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let lock_until = recent_state
@@ -570,8 +587,9 @@ impl LiquidityPool {
             .try_into()
             .map_err(|_| ExchangeError::Overflow)?;
 
+        let max_block = crate::get_max_block().ok_or(ExchangeError::BlockSyncing)?;
         let (btc_expecting, rune_expecting, new_share) =
-            self.available_to_withdraw(&initiator, share, crate::ic_timestamp())?;
+            self.available_to_withdraw(&initiator, share, max_block.block_height)?;
         (rune_expecting == rune_output && btc_expecting == btc_output_sats)
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(

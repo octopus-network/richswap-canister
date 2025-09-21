@@ -79,6 +79,7 @@ pub fn recover() {
     });
 }
 
+/// message -> {pool}:{lock_time_in_blocks}
 #[update]
 pub fn lock_lp(addr: String, message: String, sig: String) -> Result<(), ExchangeError> {
     crate::ensure_online()?;
@@ -86,10 +87,15 @@ pub fn lock_lp(addr: String, message: String, sig: String) -> Result<(), Exchang
         .map_err(|_| ExchangeError::InvalidSignature)?;
     let lock: Vec<&str> = message.split(':').collect();
     let pool = lock.get(0).ok_or(ExchangeError::InvalidLockMessage)?;
-    let lock_until = lock
+    let lock_time = lock
         .get(1)
-        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|s| s.parse::<u32>().ok())
         .ok_or(ExchangeError::InvalidLockMessage)?;
+    let max_block = crate::get_max_block().ok_or(ExchangeError::InvalidLockMessage)?;
+    let lock_until = max_block
+        .block_height
+        .checked_add(lock_time)
+        .unwrap_or(u32::MAX);
     crate::with_pool_mut(pool.to_string(), |p| {
         let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
         let state = pool.states.last_mut().ok_or(ExchangeError::EmptyPool)?;
@@ -383,8 +389,9 @@ pub fn pre_withdraw_liquidity(
     crate::ensure_online()?;
     crate::with_pool(&pool_addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
+        let max_block = crate::get_max_block().ok_or(ExchangeError::BlockSyncing)?;
         let (btc, rune_output, _) =
-            pool.available_to_withdraw(&user_addr, share, crate::ic_timestamp())?;
+            pool.available_to_withdraw(&user_addr, share, max_block.block_height)?;
         let state = pool.states.last().expect("already checked");
         Ok(WithdrawalOffer {
             input: state.utxo.clone().expect("already checked"),
@@ -659,10 +666,17 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
         "add_liquidity" => {
+            let lock_time = match action_params.is_empty() {
+                true => 0,
+                false => action_params
+                    .parse()
+                    .map_err(|_| "action params \"lock_time\" required")?,
+            };
             let (new_state, consumed) = pool
                 .validate_adding_liquidity(
                     txid,
                     nonce,
+                    lock_time,
                     pool_utxo_spent,
                     pool_utxo_received,
                     input_coins,

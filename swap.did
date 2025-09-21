@@ -27,6 +27,7 @@ type ExchangeError = variant {
   PoolAlreadyExists;
   InvalidTxid;
   InvalidLiquidity;
+  BlockSyncing;
   EmptyPool;
   InvalidLockMessage;
   FetchBitcoinCanisterError;
@@ -110,7 +111,7 @@ type PoolState = record {
   incomes : nat64;
   total_btc_donation : nat64;
   nonce : nat64;
-  lp_locks : vec record { text; nat64 };
+  lp_locks : vec record { text; nat32 };
 };
 type Result = variant { Ok : record { nat64; nat64 }; Err : text };
 type Result_1 = variant { Ok : text; Err : ExchangeError };
