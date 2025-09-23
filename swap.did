@@ -76,6 +76,7 @@ type Liquidity = record {
   total_share : nat;
   user_share : nat;
   user_incomes : nat64;
+  lock_until : nat32;
 };
 type LiquidityOffer = record {
   output : CoinBalance;
@@ -123,7 +124,10 @@ type Result_14 = variant { Ok : PoolInfo; Err : ExchangeError };
 type Result_15 = variant { Ok : vec TxRecordInfo; Err : text };
 type Result_2 = variant { Ok; Err : ExchangeError };
 type Result_3 = variant { Ok : text; Err : text };
-type Result_4 = variant { Ok : vec record { text; nat }; Err : ExchangeError };
+type Result_4 = variant {
+  Ok : vec record { text; Liquidity };
+  Err : ExchangeError;
+};
 type Result_5 = variant { Ok : Liquidity; Err : ExchangeError };
 type Result_6 = variant {
   Ok : opt record { opt PoolState; PoolState };

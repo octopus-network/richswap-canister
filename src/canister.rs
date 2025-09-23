@@ -1,5 +1,5 @@
 use crate::{
-    pool::{self, CoinMeta, PoolState},
+    pool::{self, CoinMeta, Liquidity, PoolState},
     ExchangeError,
 };
 use candid::{CandidType, Deserialize, Principal};
@@ -294,37 +294,28 @@ pub fn pre_extract_fee(addr: String) -> Result<ExtractFeeOffer, ExchangeError> {
     })
 }
 
-#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Liquidity {
-    pub user_incomes: u64,
-    pub user_share: u128,
-    pub total_share: u128,
-}
-
 #[query]
 pub fn get_lp(addr: String, user_addr: String) -> Result<Liquidity, ExchangeError> {
     crate::with_pool(&addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         pool.states
             .last()
-            .and_then(|s| {
-                Some(Liquidity {
-                    user_share: s.lp(&user_addr),
-                    user_incomes: s.earning(&user_addr),
-                    total_share: s.k,
-                })
-            })
+            .and_then(|s| Some(s.lp(&user_addr)))
             .ok_or(ExchangeError::EmptyPool)
     })
 }
 
 #[query]
-pub fn get_all_lp(addr: String) -> Result<BTreeMap<String, u128>, ExchangeError> {
+pub fn get_all_lp(addr: String) -> Result<BTreeMap<String, Liquidity>, ExchangeError> {
     crate::with_pool(&addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         pool.states
             .last()
-            .map(|s| s.lp.clone())
+            .map(|s| {
+                s.lp.iter()
+                    .map(|(addr, _)| (addr.clone(), s.lp(addr)))
+                    .collect()
+            })
             .ok_or(ExchangeError::EmptyPool)
     })
 }

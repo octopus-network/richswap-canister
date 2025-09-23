@@ -78,6 +78,14 @@ pub struct PoolState {
     pub lp_locks: BTreeMap<String, u32>,
 }
 
+#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Liquidity {
+    pub user_incomes: u64,
+    pub user_share: u128,
+    pub total_share: u128,
+    pub lock_until: u32,
+}
+
 impl PoolState {
     pub fn satoshis(&self) -> u64 {
         self.utxo.as_ref().map(|utxo| utxo.sats).unwrap_or_default()
@@ -97,12 +105,13 @@ impl PoolState {
             .unwrap_or_default()
     }
 
-    pub fn lp(&self, key: &str) -> u128 {
-        self.lp.get(key).copied().unwrap_or_default()
-    }
-
-    pub fn earning(&self, key: &str) -> u64 {
-        self.lp_earnings.get(key).copied().unwrap_or_default()
+    pub fn lp(&self, key: &str) -> Liquidity {
+        Liquidity {
+            user_incomes: self.lp_earnings.get(key).copied().unwrap_or_default(),
+            user_share: self.lp.get(key).copied().unwrap_or_default(),
+            total_share: self.k,
+            lock_until: self.lp_locks.get(key).copied().unwrap_or_default(),
+        }
     }
 }
 
@@ -480,12 +489,16 @@ impl LiquidityPool {
         let lock_until = recent_state
             .lp_locks
             .get(pubkey_hash.as_ref())
-            .map(|v| *v)
-            .unwrap_or(0);
+            .copied()
+            .unwrap_or_default();
         (lock_until < now)
             .then(|| ())
             .ok_or(ExchangeError::LiquidityLocked)?;
-        let user_total_share = recent_state.lp(pubkey_hash.as_ref());
+        let user_total_share = recent_state
+            .lp
+            .get(pubkey_hash.as_ref())
+            .copied()
+            .unwrap_or_default();
         (share <= user_total_share)
             .then(|| ())
             .ok_or(ExchangeError::InsufficientFunds)?;
