@@ -75,6 +75,7 @@ type IntentionSet = record {
 type Liquidity = record {
   total_share : nat;
   user_share : nat;
+  locked_revenue : nat64;
   user_incomes : nat64;
   lock_until : nat32;
 };
@@ -110,6 +111,7 @@ type PoolState = record {
   utxo : opt Utxo;
   total_rune_donation : nat;
   incomes : nat64;
+  locked_lp_revenue : vec record { text; nat64 };
   total_btc_donation : nat64;
   nonce : nat64;
   lp_locks : vec record { text; nat32 };

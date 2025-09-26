@@ -9,10 +9,12 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-/// represents 0.7/100 = 7/1_000 = 7000/1_000_000
-pub const DEFAULT_FEE_RATE: u64 = 7000;
-/// represents 0.2/100 = 2/1_000 = 2000/1_000_000
-pub const DEFAULT_BURN_RATE: u64 = 2000;
+/// represents 0.007
+pub const DEFAULT_LP_FEE_RATE: u64 = 7000;
+// represents 0.0035
+// pub const DEFAULT_LOCKED_LP_FEE_RATE: u64 = 3500;
+/// represents 0.002
+pub const DEFAULT_PROTOCOL_FEE_RATE: u64 = 2000;
 /// each tx's satoshis should be >= 10000
 pub const MIN_BTC_VALUE: u64 = 10000;
 /// each tx's staoshis should be <= 10000000;
@@ -76,12 +78,15 @@ pub struct PoolState {
     pub total_rune_donation: u128,
     #[serde(default)]
     pub lp_locks: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub locked_lp_revenue: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Liquidity {
     pub user_incomes: u64,
     pub user_share: u128,
+    pub locked_revenue: u64,
     pub total_share: u128,
     pub lock_until: u32,
 }
@@ -106,11 +111,16 @@ impl PoolState {
     }
 
     pub fn lp(&self, key: &str) -> Liquidity {
+        let lock_until = self.lp_locks.get(key).copied().unwrap_or_default();
+        let height = crate::get_max_block().map(|b| b.block_height).unwrap_or(0);
+        // if the lock_until is in the past, set it to 0
+        let lock_until = if lock_until < height { 0 } else { lock_until };
         Liquidity {
             user_incomes: self.lp_earnings.get(key).copied().unwrap_or_default(),
             user_share: self.lp.get(key).copied().unwrap_or_default(),
+            locked_revenue: self.locked_lp_revenue.get(key).copied().unwrap_or_default(),
             total_share: self.k,
-            lock_until: self.lp_locks.get(key).copied().unwrap_or_default(),
+            lock_until,
         }
     }
 }
@@ -180,10 +190,11 @@ impl LiquidityPool {
         self.meta.id
     }
 
-    pub(crate) fn charge_fee(btc: u64, fee_: u64, burn_: u64) -> (u64, u64, u64) {
+    /// FIXME for some reasons, we don't save the lp_fee_rate and locked_fee_rate independently
+    pub(crate) fn charge_fee(btc: u64, fee_: u64, burn_: u64) -> (u64, u64, u64, u64) {
         let fee = btc * fee_ / 1_000_000u64;
         let burn = btc * burn_ / 1_000_000u64;
-        (btc - fee - burn, fee, burn)
+        (btc - fee - burn, fee / 2, fee / 2, burn)
     }
 
     pub(crate) fn liquidity_should_add(
@@ -907,7 +918,7 @@ impl LiquidityPool {
     pub(crate) fn available_to_swap(
         &self,
         taker: CoinBalance,
-    ) -> Result<(CoinBalance, u64, u64, u32), ExchangeError> {
+    ) -> Result<(CoinBalance, u64, u64, u64, u32), ExchangeError> {
         let btc_meta = CoinMeta::btc();
         (taker.id == self.meta.id || taker.id == CoinId::btc())
             .then(|| ())
@@ -925,7 +936,7 @@ impl LiquidityPool {
             (input_btc <= MAX_BTC_VALUE as u64)
                 .then(|| ())
                 .ok_or(ExchangeError::FundsLimitExceeded)?;
-            let (input_amount, fee, burn) =
+            let (input_amount, lp_fee, locked_lp_fee, protocol_fee) =
                 Self::charge_fee(input_btc, self.fee_rate, self.burn_rate);
             let rune_remains = btc_supply
                 .checked_add(input_amount)
@@ -937,7 +948,7 @@ impl LiquidityPool {
             let price_impact = Self::ensure_price_limit(
                 btc_supply,
                 rune_supply,
-                btc_supply + input_btc,
+                btc_supply + input_amount,
                 rune_remains,
             )?;
             let offer = rune_supply - rune_remains;
@@ -946,8 +957,9 @@ impl LiquidityPool {
                     value: offer,
                     id: self.meta.id,
                 },
-                fee,
-                burn,
+                lp_fee,
+                locked_lp_fee,
+                protocol_fee,
                 price_impact,
             ))
         } else {
@@ -959,9 +971,10 @@ impl LiquidityPool {
             let min_hold = CoinMeta::btc().min_amount as u64;
             let pool_btc_remains: u64 = pool_btc_remains.try_into().expect("BTC amount overflow");
             let pre_charge = btc_supply - pool_btc_remains;
-            let (offer, fee, burn) = Self::charge_fee(pre_charge, self.fee_rate, self.burn_rate);
+            let (offer, lp_fee, locked_lp_fee, protocol_fee) =
+                Self::charge_fee(pre_charge, self.fee_rate, self.burn_rate);
             // this is the actual remains
-            let pool_btc_remains = btc_supply - offer - burn;
+            let pool_btc_remains = btc_supply - offer - protocol_fee - locked_lp_fee;
             // plus this to ensure the pool remains >= 546
             let round_to_keep = if pool_btc_remains < min_hold {
                 min_hold - pool_btc_remains
@@ -983,8 +996,9 @@ impl LiquidityPool {
                     id: btc_meta.id,
                     value: out_sats as u128,
                 },
-                fee + round_to_keep,
-                burn,
+                lp_fee + round_to_keep,
+                locked_lp_fee,
+                protocol_fee,
                 price_impact,
             ))
         }
@@ -1032,7 +1046,7 @@ impl LiquidityPool {
             ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
         )?;
         // check minimal sats
-        let (offer, fee, burn, _) = self.available_to_swap(input.coin)?;
+        let (offer, lp_fee, locked_lp_fee, protocol_fee, _) = self.available_to_swap(input.coin)?;
         let (btc_output, rune_output) = if input.coin.id == CoinId::btc() {
             let input_btc: u64 = input
                 .coin
@@ -1086,8 +1100,34 @@ impl LiquidityPool {
                 "pool_utxo_receive mismatch".to_string(),
             ))?;
         state.utxo = Some(pool_output);
+        // only update
+        let max_height = crate::get_max_block()
+            .map(|b| b.block_height)
+            .unwrap_or_default();
+        // locked LPs have extra revenue
+        for (k, _) in state.lp_locks.iter().filter(|(_, u)| **u > max_height) {
+            if let Some(fee) = state
+                .lp
+                .get(k)
+                .and_then(|share| share.checked_mul(locked_lp_fee as u128))
+                .and_then(|mul| mul.checked_div(state.k))
+            {
+                let fee_in_sats = fee as u64;
+                state
+                    .locked_lp_revenue
+                    .entry(k.clone())
+                    .and_modify(|e| *e += fee_in_sats)
+                    .or_insert(fee_in_sats);
+                state
+                    .lp_earnings
+                    .entry(k.clone())
+                    .and_modify(|e| *e += fee_in_sats)
+                    .or_insert(fee_in_sats);
+            }
+        }
+        // all LPs share the rest
         for (k, v) in state.lp.iter() {
-            if let Some(incr) = (fee as u128)
+            if let Some(incr) = (lp_fee as u128)
                 .checked_mul(*v)
                 .and_then(|mul| mul.checked_div(state.k))
             {
@@ -1099,7 +1139,7 @@ impl LiquidityPool {
             }
         }
         state.nonce += 1;
-        state.incomes += burn;
+        state.incomes += protocol_fee;
         state.id = Some(txid);
         Ok((state, prev_utxo))
     }

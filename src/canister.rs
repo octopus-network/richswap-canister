@@ -437,7 +437,7 @@ pub fn pre_swap(id: String, input: CoinBalance) -> Result<SwapOffer, ExchangeErr
     crate::with_pool(&id, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         let recent_state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let (offer, _, _, price_impact) = pool.available_to_swap(input)?;
+        let (offer, _, _, _, price_impact) = pool.available_to_swap(input)?;
         Ok(SwapOffer {
             input: recent_state.utxo.clone().expect("already checked"),
             output: offer,
