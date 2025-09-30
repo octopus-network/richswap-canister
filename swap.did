@@ -116,14 +116,20 @@ type PoolState = record {
   nonce : nat64;
   lp_locks : vec record { text; nat32 };
 };
+type PreClaimOutput = record {
+  nonce : nat64;
+  claim_sats : nat64;
+  input : Utxo;
+};
 type Result = variant { Ok : record { nat64; nat64 }; Err : text };
 type Result_1 = variant { Ok : text; Err : ExchangeError };
-type Result_10 = variant { Ok : ExtractFeeOffer; Err : ExchangeError };
-type Result_11 = variant { Ok : SwapOffer; Err : ExchangeError };
-type Result_12 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
-type Result_13 = variant { Ok : vec BlockInfo; Err : text };
-type Result_14 = variant { Ok : PoolInfo; Err : ExchangeError };
-type Result_15 = variant { Ok : vec TxRecordInfo; Err : text };
+type Result_10 = variant { Ok : DonateIntention; Err : ExchangeError };
+type Result_11 = variant { Ok : ExtractFeeOffer; Err : ExchangeError };
+type Result_12 = variant { Ok : SwapOffer; Err : ExchangeError };
+type Result_13 = variant { Ok : WithdrawalOffer; Err : ExchangeError };
+type Result_14 = variant { Ok : vec BlockInfo; Err : text };
+type Result_15 = variant { Ok : PoolInfo; Err : ExchangeError };
+type Result_16 = variant { Ok : vec TxRecordInfo; Err : text };
 type Result_2 = variant { Ok; Err : ExchangeError };
 type Result_3 = variant { Ok : text; Err : text };
 type Result_4 = variant {
@@ -137,7 +143,7 @@ type Result_6 = variant {
 };
 type Result_7 = variant { Ok; Err : text };
 type Result_8 = variant { Ok : LiquidityOffer; Err : ExchangeError };
-type Result_9 = variant { Ok : DonateIntention; Err : ExchangeError };
+type Result_9 = variant { Ok : PreClaimOutput; Err : ExchangeError };
 type RollbackTxArgs = record { txid : text };
 type SwapOffer = record {
   output : CoinBalance;
@@ -183,14 +189,15 @@ service : {
   new_block : (NewBlockInfo) -> (Result_7);
   pause : () -> ();
   pre_add_liquidity : (text, CoinBalance) -> (Result_8) query;
-  pre_donate : (text, nat64) -> (Result_9) query;
-  pre_extract_fee : (text) -> (Result_10) query;
-  pre_self_donate : () -> (Result_9) query;
-  pre_swap : (text, CoinBalance) -> (Result_11) query;
-  pre_withdraw_liquidity : (text, text, nat) -> (Result_12) query;
-  query_blocks : () -> (Result_13) query;
-  query_pool : (text) -> (Result_14) query;
-  query_tx_records : () -> (Result_15) query;
+  pre_claim_revenue : (text, text) -> (Result_9) query;
+  pre_donate : (text, nat64) -> (Result_10) query;
+  pre_extract_fee : (text) -> (Result_11) query;
+  pre_self_donate : () -> (Result_10) query;
+  pre_swap : (text, CoinBalance) -> (Result_12) query;
+  pre_withdraw_liquidity : (text, text, nat) -> (Result_13) query;
+  query_blocks : () -> (Result_14) query;
+  query_pool : (text) -> (Result_15) query;
+  query_tx_records : () -> (Result_16) query;
   recover : () -> ();
   rollback_tx : (RollbackTxArgs) -> (Result_7);
   set_donation_amount : (text, nat64, nat) -> (Result_2);

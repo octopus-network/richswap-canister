@@ -490,6 +490,90 @@ impl LiquidityPool {
         Ok((state, prev_utxo))
     }
 
+    pub(crate) fn available_to_claim(
+        &self,
+        pubkey_hash: impl AsRef<str>,
+    ) -> Result<u64, ExchangeError> {
+        let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let user_revenue = recent_state
+            .locked_lp_revenue
+            .get(pubkey_hash.as_ref())
+            .copied()
+            .unwrap_or_default();
+        (user_revenue >= MIN_BTC_VALUE)
+            .then(|| ())
+            .ok_or(ExchangeError::TooSmallFunds)?;
+        (user_revenue <= MAX_BTC_VALUE)
+            .then(|| ())
+            .ok_or(ExchangeError::FundsLimitExceeded)?;
+        let btc_remains = recent_state
+            .satoshis()
+            .checked_sub(user_revenue)
+            .ok_or(ExchangeError::EmptyPool)?;
+        (btc_remains >= CoinMeta::btc().min_amount as u64)
+            .then(|| ())
+            .ok_or(ExchangeError::EmptyPool)?;
+        Ok(user_revenue)
+    }
+
+    pub(crate) fn validate_claiming_revenue(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<Utxo>,
+        initiator: String,
+    ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
+        let pool_prev_outpoint =
+            pool_utxo_spend
+                .last()
+                .map(|s| s.clone())
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_spend not found".to_string(),
+                ))?;
+        let mut state = self.states.last().ok_or(ExchangeError::EmptyPool)?.clone();
+        // check nonce
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        // check prev state equals utxo_spend
+        let prev_utxo = state.utxo.clone().ok_or(ExchangeError::EmptyPool)?;
+        (prev_utxo.outpoint() == pool_prev_outpoint)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_spend/pool_state don't match".to_string(),
+            ))?;
+
+        let claim_sats = self.available_to_claim(&initiator)?;
+        let (pool_btc_output, pool_rune_output) = (
+            prev_utxo
+                .sats
+                .checked_sub(claim_sats)
+                .ok_or(ExchangeError::Overflow)?,
+            prev_utxo.coins.value_of(&self.meta.id),
+        );
+        let pool_output = pool_utxo_receive.last().map(|s| s.clone()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_receive not found".to_string()),
+        )?;
+        (pool_output.sats == pool_btc_output
+            && pool_output.coins.value_of(&self.meta.id) == pool_rune_output)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive mismatch with pre_claim_revenue".to_string(),
+            ))?;
+
+        state.utxo = Some(pool_output);
+        state.locked_lp_revenue.remove(&initiator);
+        state.nonce += 1;
+        state.id = Some(txid);
+        Ok((state, prev_utxo))
+    }
+
     pub(crate) fn available_to_withdraw(
         &self,
         pubkey_hash: impl AsRef<str>,

@@ -398,6 +398,31 @@ pub fn pre_withdraw_liquidity(
     })
 }
 
+#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PreClaimOutput {
+    pub input: Utxo,
+    pub claim_sats: u64,
+    pub nonce: u64,
+}
+
+#[query]
+pub fn pre_claim_revenue(
+    pool_addr: String,
+    user_addr: String,
+) -> Result<PreClaimOutput, ExchangeError> {
+    crate::ensure_online()?;
+    crate::with_pool(&pool_addr, |p| {
+        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
+        let sats = pool.available_to_claim(&user_addr)?;
+        let state = pool.states.last().expect("already checked");
+        Ok(PreClaimOutput {
+            input: state.utxo.clone().expect("already checked"),
+            claim_sats: sats,
+            nonce: state.nonce,
+        })
+    })
+}
+
 #[derive(Eq, PartialEq, CandidType, Clone, Debug, Deserialize, Serialize)]
 pub struct LiquidityOffer {
     pub inputs: Option<Utxo>,
@@ -699,6 +724,26 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                         .map_err(|_| "action params \"share\" required")?,
                     input_coins,
                     output_coins,
+                    initiator,
+                )
+                .map_err(|e| e.to_string())?;
+            crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
+            crate::with_pool_mut(pool_address, |p| {
+                let mut pool = p.expect("already checked in available_to_withdraw;qed");
+                pool.commit(new_state);
+                Ok(Some(pool))
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        "claim_revenue" => {
+            let (new_state, consumed) = pool
+                .validate_claiming_revenue(
+                    txid,
+                    nonce,
+                    pool_utxo_spent,
+                    pool_utxo_received,
                     initiator,
                 )
                 .map_err(|e| e.to_string())?;
