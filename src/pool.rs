@@ -366,6 +366,9 @@ impl LiquidityPool {
                 "pool_utxo_receive mismatch with pre_add_liquidity".to_string(),
             ))?;
         if lock_time > 0 {
+            (lock_time >= crate::min_lock_time())
+                .then_some(())
+                .ok_or(ExchangeError::InvalidLockMessage)?;
             let max_block = crate::get_max_block().ok_or(ExchangeError::BlockSyncing)?;
             let lock_until = max_block
                 .block_height
@@ -500,7 +503,7 @@ impl LiquidityPool {
             .get(pubkey_hash.as_ref())
             .copied()
             .unwrap_or_default();
-        (user_revenue >= MIN_BTC_VALUE)
+        (user_revenue >= crate::min_sats())
             .then(|| ())
             .ok_or(ExchangeError::TooSmallFunds)?;
         (user_revenue <= MAX_BTC_VALUE)
@@ -522,8 +525,16 @@ impl LiquidityPool {
         nonce: u64,
         pool_utxo_spend: Vec<String>,
         pool_utxo_receive: Vec<Utxo>,
-        initiator: String,
+        beneficiary: String,
+        input_coins: Vec<InputCoin>,
+        output_coins: Vec<OutputCoin>,
+        _initiator: String,
     ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (input_coins.is_empty() && output_coins.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "invalid input/output coins, extract fee requires 0 input and 1 output".to_string(),
+            ))?;
         (pool_utxo_receive.len() == 1)
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
@@ -536,6 +547,14 @@ impl LiquidityPool {
                 .ok_or(ExchangeError::InvalidSignPsbtArgs(
                     "pool_utxo_spend not found".to_string(),
                 ))?;
+        let output = output_coins.first().clone().expect("checked;qed");
+        (output.coin.id == CoinMeta::btc().id && output.to == beneficiary)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(format!(
+                "invalid output coin, extract fee requires 1 output of BTC to {}",
+                beneficiary
+            )))?;
+
         let mut state = self.states.last().ok_or(ExchangeError::EmptyPool)?.clone();
         // check nonce
         (state.nonce == nonce)
@@ -549,7 +568,7 @@ impl LiquidityPool {
                 "pool_utxo_spend/pool_state don't match".to_string(),
             ))?;
 
-        let claim_sats = self.available_to_claim(&initiator)?;
+        let claim_sats = self.available_to_claim(&beneficiary)?;
         let (pool_btc_output, pool_rune_output) = (
             prev_utxo
                 .sats
@@ -568,7 +587,7 @@ impl LiquidityPool {
             ))?;
 
         state.utxo = Some(pool_output);
-        state.locked_lp_revenue.remove(&initiator);
+        state.locked_lp_revenue.remove(&beneficiary);
         state.nonce += 1;
         state.id = Some(txid);
         Ok((state, prev_utxo))

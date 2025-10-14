@@ -654,6 +654,16 @@ pub(crate) fn min_sats() -> u64 {
     }
 }
 
+pub(crate) fn min_lock_time() -> u32 {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            1
+        } else {
+            144 * 7
+        }
+    }
+}
+
 #[must_use]
 pub struct ExecuteTxGuard(String);
 

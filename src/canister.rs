@@ -91,6 +91,9 @@ pub fn lock_lp(addr: String, message: String, sig: String) -> Result<(), Exchang
         .get(1)
         .and_then(|s| s.parse::<u32>().ok())
         .ok_or(ExchangeError::InvalidLockMessage)?;
+    (lock_time >= crate::min_lock_time())
+        .then_some(())
+        .ok_or(ExchangeError::InvalidLockMessage)?;
     let max_block = crate::get_max_block().ok_or(ExchangeError::InvalidLockMessage)?;
     let lock_until = max_block
         .block_height
@@ -744,6 +747,9 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                     nonce,
                     pool_utxo_spent,
                     pool_utxo_received,
+                    action_params,
+                    input_coins,
+                    output_coins,
                     initiator,
                 )
                 .map_err(|e| e.to_string())?;
