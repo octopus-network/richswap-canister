@@ -3,7 +3,10 @@ mod pool;
 mod psbt;
 mod reorg;
 
-use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE};
+use crate::pool::{
+    CoinMeta, FeeAdjustMechanism, LiquidityPool, PoolTemplate, DEFAULT_LP_FEE_RATE,
+    DEFAULT_PROTOCOL_FEE_RATE,
+};
 use candid::{CandidType, Deserialize, Principal};
 use ic_cdk::api::management_canister::schnorr::{
     self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument,
@@ -116,6 +119,8 @@ pub enum ExchangeError {
     InvalidLockMessage,
     #[error("operation is forbidden during synching blocks")]
     BlockSyncing,
+    #[error("Couldn't add liquidity into onetime pools and it must be permanently locked")]
+    OnetimePool,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -284,16 +289,32 @@ pub(crate) async fn sign_prehash_with_schnorr(
 
 pub(crate) fn create_empty_pool(
     meta: CoinMeta,
+    template: PoolTemplate,
     untweaked: Pubkey,
 ) -> Result<String, ExchangeError> {
     if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
+    let fee_adjust_mechanism = match template {
+        PoolTemplate::Standard => None,
+        PoolTemplate::Onetime => Some(FeeAdjustMechanism {
+            start_at: 0,
+            decr_interval_ms: 10 * 60 * 1000,
+            rate_decr_step: 10_000,
+            min_rate: 100_000,
+        }),
+    };
+    let (lp_fee, protocol_fee) = if fee_adjust_mechanism.is_some() {
+        (990_000, 10_000)
+    } else {
+        (DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE)
+    };
     let pool = LiquidityPool::new_empty(
         meta,
-        DEFAULT_LP_FEE_RATE,
-        DEFAULT_PROTOCOL_FEE_RATE,
+        fee_adjust_mechanism,
+        lp_fee,
+        protocol_fee,
         untweaked.clone(),
     )
     .expect("didn't set fee rate");

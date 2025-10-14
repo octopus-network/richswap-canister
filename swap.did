@@ -21,6 +21,7 @@ type ExchangeError = variant {
   InvalidSignature;
   TooSmallFunds;
   LiquidityLocked;
+  OnetimePool;
   InvalidRuneId;
   InvalidPool;
   InvalidPsbt : text;
@@ -116,6 +117,7 @@ type PoolState = record {
   nonce : nat64;
   lp_locks : vec record { text; nat32 };
 };
+type PoolTemplate = variant { onetime; standard };
 type PreClaimOutput = record {
   nonce : nat64;
   claim_sats : nat64;
@@ -171,6 +173,7 @@ type WithdrawalOffer = record {
 service : {
   blocks_tx_records_count : () -> (Result) query;
   create : (text) -> (Result_1);
+  create_with_template : (text, PoolTemplate) -> (Result_1);
   donate_rich_protocol_revenue : () -> (Result_2);
   escape_hatch : (text, text, nat64) -> (Result_3);
   execute_tx : (ExecuteTxArgs) -> (Result_3);

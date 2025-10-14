@@ -1,5 +1,5 @@
 use crate::{
-    pool::{self, CoinMeta, Liquidity, PoolState},
+    pool::{self, CoinMeta, Liquidity, PoolState, PoolTemplate},
     ExchangeError,
 };
 use candid::{CandidType, Deserialize, Principal};
@@ -154,8 +154,7 @@ pub fn get_tx_affected(txid: Txid) -> Option<TxRecord> {
     crate::get_tx_affected(txid)
 }
 
-#[update]
-pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
+pub async fn create_pool(rune_id: CoinId, template: PoolTemplate) -> Result<String, ExchangeError> {
     crate::ensure_online()?;
     match crate::with_pool_name(&rune_id) {
         Some(addr) => crate::with_pool(&addr, |pool| {
@@ -187,9 +186,23 @@ pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
                 symbol: name,
                 min_amount: 1,
             };
-            crate::create_empty_pool(meta, untweaked_pubkey.clone())
+            crate::create_empty_pool(meta, template, untweaked_pubkey.clone())
         }
     }
+}
+
+#[update]
+pub async fn create_with_template(
+    rune_id: CoinId,
+    template: PoolTemplate,
+) -> Result<String, ExchangeError> {
+    // TODO whitelist
+    create_pool(rune_id, template).await
+}
+
+#[update]
+pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
+    create_pool(rune_id, PoolTemplate::Standard).await
 }
 
 #[query]
@@ -681,7 +694,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
 
     let _guard = crate::ExecuteTxGuard::new(pool_addr.clone())
         .ok_or(format!("Pool {0} Executing", pool_addr).to_string())?;
-    let pool = crate::with_pool(&pool_address, |p| p.clone())
+    let mut pool = crate::with_pool(&pool_address, |p| p.clone())
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
         "add_liquidity" => {
@@ -708,8 +721,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                     .await
                     .map_err(|e| e.to_string())?;
             }
-            crate::with_pool_mut(pool_address, |p| {
-                let mut pool = p.expect("already checked in pre_add_liquidity;qed");
+            crate::with_pool_mut(pool_address, |_| {
                 pool.commit(new_state);
                 Ok(Some(pool))
             })
