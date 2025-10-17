@@ -142,9 +142,7 @@ impl PoolState {
 
     pub fn lp(&self, key: &str) -> Liquidity {
         let lock_until = self.lp_locks.get(key).copied().unwrap_or_default();
-        let height = crate::get_max_block().map(|b| b.block_height).unwrap_or(0);
         // if the lock_until is in the past, set it to 0
-        let lock_until = if lock_until < height { 0 } else { lock_until };
         Liquidity {
             user_incomes: self.lp_earnings.get(key).copied().unwrap_or_default(),
             user_share: self.lp.get(key).copied().unwrap_or_default(),
@@ -823,6 +821,130 @@ impl LiquidityPool {
         }
         state.nonce += 1;
         state.id = Some(txid);
+        Ok((state, prev_utxo))
+    }
+
+    pub(crate) fn wish_to_bi_donate(
+        &self,
+        input_sats: u64,
+        input_rune: CoinBalance,
+    ) -> Result<(CoinBalance, u64), ExchangeError> {
+        (input_sats >= crate::min_sats())
+            .then(|| ())
+            .ok_or(ExchangeError::TooSmallFunds)?;
+        if input_rune.id != self.meta.id {
+            return Err(ExchangeError::InvalidPool);
+        }
+        let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let total_sats = recent_state
+            .utxo
+            .as_ref()
+            .map(|u| u.sats)
+            .ok_or(ExchangeError::EmptyPool)?;
+        let rune_supply = recent_state.rune_supply(&self.base_id());
+        (total_sats != 0 && rune_supply != 0)
+            .then(|| ())
+            .ok_or(ExchangeError::EmptyPool)?;
+        Ok((
+            CoinBalance {
+                value: rune_supply + input_rune.value,
+                id: self.meta.id,
+            },
+            total_sats + input_sats,
+        ))
+    }
+
+    pub(crate) fn validate_bi_donate(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<Utxo>,
+        input_coins: Vec<InputCoin>,
+        output_coins: Vec<OutputCoin>,
+    ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (input_coins.len() == 2 && output_coins.is_empty())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "invalid input/output coins, donate requires 2 inputs and 0 output".to_string(),
+            ))?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
+        let x = input_coins[0].coin.clone();
+        let y = input_coins[1].coin.clone();
+        let mut state = self
+            .states
+            .last()
+            .cloned()
+            .ok_or(ExchangeError::EmptyPool)?;
+        // check nonce
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        let prev_outpoint =
+            pool_utxo_spend
+                .last()
+                .map(|s| s.clone())
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_spend not found".to_string(),
+                ))?;
+        let prev_utxo = state.utxo.clone().ok_or(ExchangeError::EmptyPool)?;
+        (prev_outpoint == prev_utxo.outpoint()).then(|| ()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
+        )?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
+        let (btc_input, rune_input) = if x.id == CoinId::btc() && y.id != CoinId::btc() {
+            Ok((x, y))
+        } else if x.id != CoinId::btc() && y.id == CoinId::btc() {
+            Ok((y, x))
+        } else {
+            Err(ExchangeError::InvalidSignPsbtArgs(
+                "Invalid inputs: requires 2 different input coins".to_string(),
+            ))
+        }?;
+
+        let (out_rune, out_sats) = self.wish_to_bi_donate(btc_input.value as u64, rune_input)?;
+        let pool_output = pool_utxo_receive.last().map(|s| s.clone()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_receive not found".to_string()),
+        )?;
+        ic_cdk::println!(
+            "pool_output: {:?}, out_sats: {}, out_rune({}): {}",
+            pool_output,
+            out_sats,
+            out_rune.id,
+            out_rune.value
+        );
+        (pool_output.sats == out_sats
+            && pool_output.coins.value_of(&self.meta.id) == out_rune.value)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive mismatch with pre_donate".to_string(),
+            ))?;
+        let new_k = crate::sqrt(out_rune.value * (out_sats - state.incomes) as u128);
+        let mut new_lp = BTreeMap::new();
+        for (lp, share) in state.lp.iter() {
+            new_lp.insert(
+                lp.clone(),
+                share
+                    .checked_mul(new_k)
+                    .and_then(|mul| mul.checked_div(state.k))
+                    .ok_or(ExchangeError::Overflow)?,
+            );
+        }
+        let k_adjust = new_lp.values().sum();
+        state.id = Some(txid);
+        state.nonce += 1;
+        state.k = k_adjust;
+        state.lp = new_lp;
+        state.total_btc_donation += btc_input.value as u64;
+        state.utxo = Some(pool_output);
         Ok((state, prev_utxo))
     }
 
