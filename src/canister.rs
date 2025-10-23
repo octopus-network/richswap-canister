@@ -1,5 +1,5 @@
 use crate::{
-    pool::{self, CoinMeta, PoolState},
+    pool::{self, CoinMeta, Liquidity, PoolState},
     ExchangeError,
 };
 use candid::{CandidType, Deserialize, Principal};
@@ -77,6 +77,43 @@ pub fn recover() {
     crate::PAUSED.with_borrow_mut(|p| {
         let _ = p.set(false);
     });
+}
+
+/// message -> {pool}:{lock_time_in_blocks}
+#[update]
+pub fn lock_lp(addr: String, message: String, sig: String) -> Result<(), ExchangeError> {
+    crate::ensure_online()?;
+    bip322::verify_simple_encoded(&addr, &message, &sig)
+        .map_err(|_| ExchangeError::InvalidSignature)?;
+    let lock: Vec<&str> = message.split(':').collect();
+    let pool = lock.get(0).ok_or(ExchangeError::InvalidLockMessage)?;
+    let lock_time = lock
+        .get(1)
+        .and_then(|s| s.parse::<u32>().ok())
+        .ok_or(ExchangeError::InvalidLockMessage)?;
+    (lock_time >= crate::min_lock_time())
+        .then_some(())
+        .ok_or(ExchangeError::InvalidLockMessage)?;
+    let max_block = crate::get_max_block().ok_or(ExchangeError::InvalidLockMessage)?;
+    let lock_until = max_block
+        .block_height
+        .checked_add(lock_time)
+        .unwrap_or(u32::MAX);
+    crate::with_pool_mut(pool.to_string(), |p| {
+        let mut pool = p.ok_or(ExchangeError::InvalidPool)?;
+        let state = pool.states.last_mut().ok_or(ExchangeError::EmptyPool)?;
+        state
+            .lp_locks
+            .entry(addr.clone())
+            .and_modify(|t| {
+                if *t < lock_until {
+                    *t = lock_until;
+                }
+            })
+            .or_insert(lock_until);
+        Ok(Some(pool))
+    })?;
+    Ok(())
 }
 
 #[query]
@@ -260,37 +297,28 @@ pub fn pre_extract_fee(addr: String) -> Result<ExtractFeeOffer, ExchangeError> {
     })
 }
 
-#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Liquidity {
-    pub user_incomes: u64,
-    pub user_share: u128,
-    pub total_share: u128,
-}
-
 #[query]
 pub fn get_lp(addr: String, user_addr: String) -> Result<Liquidity, ExchangeError> {
     crate::with_pool(&addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         pool.states
             .last()
-            .and_then(|s| {
-                Some(Liquidity {
-                    user_share: s.lp(&user_addr),
-                    user_incomes: s.earning(&user_addr),
-                    total_share: s.k,
-                })
-            })
+            .and_then(|s| Some(s.lp(&user_addr)))
             .ok_or(ExchangeError::EmptyPool)
     })
 }
 
 #[query]
-pub fn get_all_lp(addr: String) -> Result<BTreeMap<String, u128>, ExchangeError> {
+pub fn get_all_lp(addr: String) -> Result<BTreeMap<String, Liquidity>, ExchangeError> {
     crate::with_pool(&addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         pool.states
             .last()
-            .map(|s| s.lp.clone())
+            .map(|s| {
+                s.lp.iter()
+                    .map(|(addr, _)| (addr.clone(), s.lp(addr)))
+                    .collect()
+            })
             .ok_or(ExchangeError::EmptyPool)
     })
 }
@@ -355,7 +383,9 @@ pub fn pre_withdraw_liquidity(
     crate::ensure_online()?;
     crate::with_pool(&pool_addr, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
-        let (btc, rune_output, _) = pool.available_to_withdraw(&user_addr, share)?;
+        let max_block = crate::get_max_block().ok_or(ExchangeError::BlockSyncing)?;
+        let (btc, rune_output, _) =
+            pool.available_to_withdraw(&user_addr, share, max_block.block_height)?;
         let state = pool.states.last().expect("already checked");
         Ok(WithdrawalOffer {
             input: state.utxo.clone().expect("already checked"),
@@ -366,6 +396,31 @@ pub fn pre_withdraw_liquidity(
                 },
                 rune_output,
             ],
+            nonce: state.nonce,
+        })
+    })
+}
+
+#[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PreClaimOutput {
+    pub input: Utxo,
+    pub claim_sats: u64,
+    pub nonce: u64,
+}
+
+#[query]
+pub fn pre_claim_revenue(
+    pool_addr: String,
+    user_addr: String,
+) -> Result<PreClaimOutput, ExchangeError> {
+    crate::ensure_online()?;
+    crate::with_pool(&pool_addr, |p| {
+        let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
+        let sats = pool.available_to_claim(&user_addr)?;
+        let state = pool.states.last().expect("already checked");
+        Ok(PreClaimOutput {
+            input: state.utxo.clone().expect("already checked"),
+            claim_sats: sats,
             nonce: state.nonce,
         })
     })
@@ -410,7 +465,7 @@ pub fn pre_swap(id: String, input: CoinBalance) -> Result<SwapOffer, ExchangeErr
     crate::with_pool(&id, |p| {
         let pool = p.as_ref().ok_or(ExchangeError::InvalidPool)?;
         let recent_state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
-        let (offer, _, _, price_impact) = pool.available_to_swap(input)?;
+        let (offer, _, _, _, price_impact) = pool.available_to_swap(input)?;
         Ok(SwapOffer {
             input: recent_state.utxo.clone().expect("already checked"),
             output: offer,
@@ -630,10 +685,17 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
         "add_liquidity" => {
+            let lock_time = match action_params.is_empty() {
+                true => 0,
+                false => action_params
+                    .parse()
+                    .map_err(|_| "action params \"lock_time\" required")?,
+            };
             let (new_state, consumed) = pool
                 .validate_adding_liquidity(
                     txid,
                     nonce,
+                    lock_time,
                     pool_utxo_spent,
                     pool_utxo_received,
                     input_coins,
@@ -663,6 +725,29 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                     action_params
                         .parse()
                         .map_err(|_| "action params \"share\" required")?,
+                    input_coins,
+                    output_coins,
+                    initiator,
+                )
+                .map_err(|e| e.to_string())?;
+            crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
+            crate::with_pool_mut(pool_address, |p| {
+                let mut pool = p.expect("already checked in available_to_withdraw;qed");
+                pool.commit(new_state);
+                Ok(Some(pool))
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        "claim_revenue" => {
+            let (new_state, consumed) = pool
+                .validate_claiming_revenue(
+                    txid,
+                    nonce,
+                    pool_utxo_spent,
+                    pool_utxo_received,
+                    action_params,
                     input_coins,
                     output_coins,
                     initiator,

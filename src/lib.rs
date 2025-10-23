@@ -1,10 +1,9 @@
 mod canister;
-mod migrate;
 mod pool;
 mod psbt;
 mod reorg;
 
-use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_BURN_RATE, DEFAULT_FEE_RATE};
+use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE};
 use candid::{CandidType, Deserialize, Principal};
 use ic_cdk::api::management_canister::schnorr::{
     self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument,
@@ -109,27 +108,31 @@ pub enum ExchangeError {
     PriceImpactLimitExceeded,
     #[error("Funds limit exceeded")]
     FundsLimitExceeded,
+    #[error("Liquidity locked")]
+    LiquidityLocked,
+    #[error("invalid bip-322 signature")]
+    InvalidSignature,
+    #[error("invalid lock message")]
+    InvalidLockMessage,
+    #[error("operation is forbidden during synching blocks")]
+    BlockSyncing,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
 const _POOL_TOKENS_MEMORY_ID_V2: MemoryId = MemoryId::new(1);
-const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
-const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
-// deprecated
 const _POOL_ADDR_MEMORY_ID: MemoryId = MemoryId::new(4);
 const _POOLS_MEMORY_ID_V2: MemoryId = MemoryId::new(5);
-// the v3 is token -> addr
-const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(7);
-// the v3 is addr -> pool, notice: 6 is deprecated in the testnet
-const POOLS_MEMORY_ID_V4: MemoryId = MemoryId::new(10);
+const _POOLS_MEMORY_ID_V4: MemoryId = MemoryId::new(10);
 
+const FEE_COLLECTOR_MEMORY_ID: MemoryId = MemoryId::new(2);
+const ORCHESTRATOR_MEMORY_ID: MemoryId = MemoryId::new(3);
+const POOL_TOKENS_MEMORY_ID: MemoryId = MemoryId::new(7);
 const BLOCKS_ID: MemoryId = MemoryId::new(8);
 const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
 #[allow(unused)]
 const WHITELIST_ID: MemoryId = MemoryId::new(11);
 const PAUSED_ID: MemoryId = MemoryId::new(12);
-
 const POOLS_MEMORY_ID: MemoryId = MemoryId::new(13);
 
 thread_local! {
@@ -138,23 +141,11 @@ thread_local! {
     static MEMORY_MANAGER: RefCell<Option<MemoryManager<DefaultMemoryImpl>>> =
         RefCell::new(Some(MemoryManager::init(MEMORY.with(|m| m.borrow().clone().unwrap()))));
 
-    // static POOLS_V2: RefCell<StableBTreeMap<Pubkey, crate::migrate::LiquidityPoolV2, Memory>> =
-    //     RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V2))));
-
-    pub(crate) static POOLS_V4: RefCell<StableBTreeMap<String, migrate::LiquidityPoolV4, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID_V4))));
-
-    pub(crate) static POOLS: RefCell<StableBTreeMap<String, LiquidityPool, Memory>> =
+    static POOLS: RefCell<StableBTreeMap<String, LiquidityPool, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOLS_MEMORY_ID))));
 
-    static _POOL_TOKENS_V2: RefCell<StableBTreeMap<CoinId, Pubkey, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(_POOL_TOKENS_MEMORY_ID_V2))));
-
-    pub(crate) static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, String, Memory>> =
+    static POOL_TOKENS: RefCell<StableBTreeMap<CoinId, String, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_TOKENS_MEMORY_ID))));
-
-    static _POOL_ADDR_DEPRECATED: RefCell<StableBTreeMap<String, Pubkey, Memory>> =
-        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(_POOL_ADDR_MEMORY_ID))));
 
     static FEE_COLLECTOR: RefCell<Cell<String, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(FEE_COLLECTOR_MEMORY_ID)), DEFAULT_FEE_COLLECTOR.to_string())
@@ -164,19 +155,19 @@ thread_local! {
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(ORCHESTRATOR_MEMORY_ID)), Principal::from_str(ORCHESTRATOR_CANISTER).expect("invalid principal: orchestrator"))
                      .expect("fail to init a StableCell"));
 
-    pub(crate) static BLOCKS: RefCell<StableBTreeMap<u32, NewBlockInfo, Memory>> =
+    static BLOCKS: RefCell<StableBTreeMap<u32, NewBlockInfo, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(BLOCKS_ID))));
 
-    pub(crate) static TX_RECORDS: RefCell<StableBTreeMap<(Txid, bool), TxRecord, Memory>> =
+    static TX_RECORDS: RefCell<StableBTreeMap<(Txid, bool), TxRecord, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(TX_RECORDS_ID))));
 
-    pub(crate) static WHITELIST: RefCell<StableBTreeMap<String, (), Memory>> =
+    static WHITELIST: RefCell<StableBTreeMap<String, (), Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(WHITELIST_ID))));
 
-    pub(crate) static PAUSED: RefCell<Cell<bool, Memory>> =
+    static PAUSED: RefCell<Cell<bool, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(PAUSED_ID)), false).expect("fail to init a StableCell"));
 
-    pub(crate) static GUARDS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static GUARDS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -299,9 +290,13 @@ pub(crate) fn create_empty_pool(
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
-    let pool =
-        LiquidityPool::new_empty(meta, DEFAULT_FEE_RATE, DEFAULT_BURN_RATE, untweaked.clone())
-            .expect("didn't set fee rate");
+    let pool = LiquidityPool::new_empty(
+        meta,
+        DEFAULT_LP_FEE_RATE,
+        DEFAULT_PROTOCOL_FEE_RATE,
+        untweaked.clone(),
+    )
+    .expect("didn't set fee rate");
     let addr = pool.addr.clone();
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, addr.clone());
@@ -655,6 +650,16 @@ pub(crate) fn min_sats() -> u64 {
             546
         } else {
             pool::MIN_BTC_VALUE
+        }
+    }
+}
+
+pub(crate) fn min_lock_time() -> u32 {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            1
+        } else {
+            144 * 7
         }
     }
 }
