@@ -829,9 +829,6 @@ impl LiquidityPool {
         input_sats: u64,
         input_rune: CoinBalance,
     ) -> Result<(CoinBalance, u64), ExchangeError> {
-        (input_sats >= crate::min_sats())
-            .then(|| ())
-            .ok_or(ExchangeError::TooSmallFunds)?;
         if input_rune.id != self.meta.id {
             return Err(ExchangeError::InvalidPool);
         }
@@ -952,9 +949,6 @@ impl LiquidityPool {
         &self,
         input_sats: u64,
     ) -> Result<(CoinBalance, u64), ExchangeError> {
-        (input_sats >= crate::min_sats())
-            .then(|| ())
-            .ok_or(ExchangeError::TooSmallFunds)?;
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let total_sats = recent_state
             .utxo
