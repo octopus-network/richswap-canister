@@ -299,7 +299,7 @@ pub(crate) fn create_empty_pool(
     let fee_adjust_mechanism = match template {
         PoolTemplate::Standard => None,
         PoolTemplate::Onetime => Some(FeeAdjustMechanism {
-            start_at: 0,
+            start_at: ic_cdk::api::time() / 1_000_000,
             decr_interval_ms: 10 * 60 * 1000,
             rate_decr_step: 10_000,
             min_rate: 100_000,

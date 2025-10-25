@@ -308,7 +308,7 @@ impl LiquidityPool {
         &mut self,
         txid: Txid,
         nonce: u64,
-        lock_time: u32,
+        mut lock_time: u32,
         pool_utxo_spend: Vec<String>,
         pool_utxo_receive: Vec<Utxo>,
         input_coins: Vec<InputCoin>,
@@ -333,9 +333,7 @@ impl LiquidityPool {
             (self.states.is_empty())
                 .then(|| ())
                 .ok_or(ExchangeError::OnetimePool)?;
-            (lock_time == u32::MAX)
-                .then(|| ())
-                .ok_or(ExchangeError::OnetimePool)?;
+            lock_time = u32::MAX;
             mechanism.start_at = ic_cdk::api::time() / 1_000_000;
         }
 
