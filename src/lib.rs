@@ -51,6 +51,11 @@ pub const TESTNET_GUARDIAN_PRINCIPAL: &'static str =
 pub const GUARDIAN_PRINCIPAL: &'static str =
     "v5md3-vs7qy-se4kd-gzd2u-mi225-76rva-rt2ci-ibb2p-petro-2y7aj-hae";
 
+pub const ONETIME_INIT_FEE_RATE: u64 = 990_000; // 99%
+pub const ONETIME_MAX_DECR: u64 = 890_000; // 89%
+pub const ONETIME_DECR_INTERVAL_MS: u64 = 600_000; // 10 min
+pub const ONETIME_DECR_STEP: u64 = 10_000; // 1%
+
 #[derive(Eq, PartialEq, Clone, CandidType, Debug, Deserialize, Serialize)]
 pub struct Output {
     pub balance: CoinBalance,
@@ -300,13 +305,13 @@ pub(crate) fn create_empty_pool(
         PoolTemplate::Standard => None,
         PoolTemplate::Onetime => Some(FeeAdjustMechanism {
             start_at: ic_cdk::api::time() / 1_000_000,
-            decr_interval_ms: 10 * 60 * 1000,
-            rate_decr_step: 10_000,
-            min_rate: 100_000,
+            decr_interval_ms: ONETIME_DECR_INTERVAL_MS,
+            rate_decr_step: ONETIME_DECR_STEP,
+            min_rate: ONETIME_INIT_FEE_RATE - ONETIME_MAX_DECR,
         }),
     };
     let (lp_fee, protocol_fee) = if fee_adjust_mechanism.is_some() {
-        (990_000, 10_000)
+        (ONETIME_INIT_FEE_RATE, 10_000)
     } else {
         (DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE)
     };

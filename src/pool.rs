@@ -90,6 +90,7 @@ impl LiquidityPool {
             "total_btc_donation": self.states.last().map(|state| state.total_btc_donation).unwrap_or_default(),
             "total_rune_donation": self.states.last().map(|state| state.total_rune_donation).unwrap_or_default(),
             "template": self.fee_adjust_mechanism.map(|_| PoolTemplate::Onetime).unwrap_or(PoolTemplate::Standard),
+            "fee_adjust_mechanism": self.fee_adjust_mechanism,
         });
         serde_json::to_string(&attr).expect("failed to serialize")
     }
@@ -222,11 +223,12 @@ impl LiquidityPool {
 
     pub fn get_lp_fee(&self) -> u64 {
         match self.fee_adjust_mechanism {
-            Some(machanism) => {
+            Some(mechanism) => {
                 let current_ms = ic_cdk::api::time() / 1_000_000;
-                let decr = (current_ms - machanism.start_at) / machanism.decr_interval_ms
-                    * machanism.rate_decr_step;
-                u64::max(self.fee_rate - decr, machanism.min_rate)
+                let decr = (current_ms - mechanism.start_at) / mechanism.decr_interval_ms
+                    * mechanism.rate_decr_step;
+                let decr = u64::min(decr, self.fee_rate - mechanism.min_rate);
+                self.fee_rate - decr
             }
             None => self.fee_rate,
         }
@@ -1528,4 +1530,23 @@ pub fn test_price_limit() {
     let delta = LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1);
     assert!(delta.is_ok());
     assert_eq!(delta.unwrap(), 909);
+}
+
+#[test]
+pub fn test_fee_adjust() {
+    let mechanism = FeeAdjustMechanism {
+        start_at: 1761368803654,
+        decr_interval_ms: 10 * 60 * 1000,
+        rate_decr_step: 10_000,
+        min_rate: 100_000,
+    };
+    let current_ms = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let decr =
+        (current_ms - mechanism.start_at) / mechanism.decr_interval_ms * mechanism.rate_decr_step;
+    let decr = u64::min(decr, 990_000 - mechanism.min_rate);
+    let fee_rate = 990_000 - decr;
+    assert_eq!(fee_rate, 100_000);
 }
