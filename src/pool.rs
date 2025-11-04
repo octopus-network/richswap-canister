@@ -11,8 +11,6 @@ use std::str::FromStr;
 
 /// represents 0.007
 pub const DEFAULT_LP_FEE_RATE: u64 = 7000;
-// represents 0.0035
-// pub const DEFAULT_LOCKED_LP_FEE_RATE: u64 = 3500;
 /// represents 0.002
 pub const DEFAULT_PROTOCOL_FEE_RATE: u64 = 2000;
 /// each tx's satoshis should be >= 10000
@@ -152,6 +150,29 @@ impl PoolState {
             lock_until,
         }
     }
+
+    pub(crate) fn charge_fee(
+        &self,
+        btc: u64,
+        fee_: u64,
+        burn_: u64,
+    ) -> Result<(u64, u64, u64, u64), ExchangeError> {
+        let max_block = crate::get_max_block().ok_or(ExchangeError::BlockSyncing)?;
+        let total_locked = self
+            .lp_locks
+            .iter()
+            .filter(|(_, v)| **v > max_block.block_height)
+            .map(|(k, _)| self.lp.get(k.as_str()).copied().unwrap_or_default())
+            .sum();
+        let fee = btc * fee_ / 1_000_000u64;
+        let locked_fee = (fee as u128)
+            .checked_mul(total_locked)
+            .and_then(|v| v.checked_div(self.k))
+            .ok_or(ExchangeError::Overflow)?;
+        let locked_fee = locked_fee.try_into().map_err(|_| ExchangeError::Overflow)?;
+        let burn = btc * burn_ / 1_000_000u64;
+        Ok((btc - fee - burn, fee - locked_fee, locked_fee, burn))
+    }
 }
 
 impl Storable for PoolState {
@@ -232,13 +253,6 @@ impl LiquidityPool {
             }
             None => self.fee_rate,
         }
-    }
-
-    /// FIXME for some reasons, we don't save the lp_fee_rate and locked_fee_rate independently
-    pub(crate) fn charge_fee(btc: u64, fee_: u64, burn_: u64) -> (u64, u64, u64, u64) {
-        let fee = btc * fee_ / 1_000_000u64;
-        let burn = btc * burn_ / 1_000_000u64;
-        (btc - fee - burn, fee / 2, fee / 2, burn)
     }
 
     pub(crate) fn liquidity_should_add(
@@ -1211,7 +1225,7 @@ impl LiquidityPool {
                 .then(|| ())
                 .ok_or(ExchangeError::FundsLimitExceeded)?;
             let (input_amount, lp_fee, locked_lp_fee, protocol_fee) =
-                Self::charge_fee(input_btc, self.get_lp_fee(), self.burn_rate);
+                recent_state.charge_fee(input_btc, self.fee_rate, self.burn_rate)?;
             let rune_remains = btc_supply
                 .checked_add(input_amount)
                 .and_then(|sum| k.checked_div(sum as u128))
@@ -1246,7 +1260,7 @@ impl LiquidityPool {
             let pool_btc_remains: u64 = pool_btc_remains.try_into().expect("BTC amount overflow");
             let pre_charge = btc_supply - pool_btc_remains;
             let (offer, lp_fee, locked_lp_fee, protocol_fee) =
-                Self::charge_fee(pre_charge, self.get_lp_fee(), self.burn_rate);
+                recent_state.charge_fee(pre_charge, self.fee_rate, self.burn_rate)?;
             // this is the actual remains
             let pool_btc_remains = btc_supply - offer - protocol_fee - locked_lp_fee;
             // plus this to ensure the pool remains >= 546
