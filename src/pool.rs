@@ -1392,13 +1392,21 @@ impl LiquidityPool {
         let max_height = crate::get_max_block()
             .map(|b| b.block_height)
             .unwrap_or_default();
+        let total_locked = state
+            .lp_locks
+            .iter()
+            .filter(|(_, v)| **v > max_height)
+            .map(|(k, _)| state.lp.get(k.as_str()).copied().unwrap_or_default())
+            .sum();
+
         // locked LPs have extra revenue
         for (k, _) in state.lp_locks.iter().filter(|(_, u)| **u > max_height) {
+            // the share means locked/total_locked
             if let Some(fee) = state
                 .lp
                 .get(k)
                 .and_then(|share| share.checked_mul(locked_lp_fee as u128))
-                .and_then(|mul| mul.checked_div(state.k))
+                .and_then(|mul| mul.checked_div(total_locked))
             {
                 let fee_in_sats = fee as u64;
                 state
