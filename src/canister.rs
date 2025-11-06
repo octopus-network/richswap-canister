@@ -1,5 +1,5 @@
 use crate::{
-    pool::{self, CoinMeta, Liquidity, PoolState},
+    pool::{self, CoinMeta, Liquidity, PoolState, PoolTemplate},
     ExchangeError,
 };
 use candid::{CandidType, Deserialize, Principal};
@@ -154,8 +154,7 @@ pub fn get_tx_affected(txid: Txid) -> Option<TxRecord> {
     crate::get_tx_affected(txid)
 }
 
-#[update]
-pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
+pub async fn create_pool(rune_id: CoinId, template: PoolTemplate) -> Result<String, ExchangeError> {
     crate::ensure_online()?;
     match crate::with_pool_name(&rune_id) {
         Some(addr) => crate::with_pool(&addr, |pool| {
@@ -187,9 +186,22 @@ pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
                 symbol: name,
                 min_amount: 1,
             };
-            crate::create_empty_pool(meta, untweaked_pubkey.clone())
+            crate::create_empty_pool(meta, template, untweaked_pubkey.clone())
         }
     }
+}
+
+#[update(guard = "ensure_pool_creator")]
+pub async fn create_with_template(
+    rune_id: CoinId,
+    template: PoolTemplate,
+) -> Result<String, ExchangeError> {
+    create_pool(rune_id, template).await
+}
+
+#[update]
+pub async fn create(rune_id: CoinId) -> Result<String, ExchangeError> {
+    create_pool(rune_id, PoolTemplate::Standard).await
 }
 
 #[query]
@@ -247,6 +259,24 @@ pub async fn pre_donate(pool: String, input_sats: u64) -> Result<DonateIntention
     let pool = crate::with_pool(&pool, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
     let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
     let (out_rune, out_sats) = pool.wish_to_donate(input_sats)?;
+    Ok(DonateIntention {
+        input: state.utxo.clone().ok_or(ExchangeError::EmptyPool)?,
+        nonce: state.nonce,
+        out_rune,
+        out_sats,
+    })
+}
+
+#[query]
+pub async fn pre_bi_donate(
+    pool: String,
+    input_sats: u64,
+    input_rune: CoinBalance,
+) -> Result<DonateIntention, ExchangeError> {
+    crate::ensure_online()?;
+    let pool = crate::with_pool(&pool, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
+    let state = pool.states.last().ok_or(ExchangeError::EmptyPool)?;
+    let (out_rune, out_sats) = pool.wish_to_bi_donate(input_sats, input_rune)?;
     Ok(DonateIntention {
         input: state.utxo.clone().ok_or(ExchangeError::EmptyPool)?,
         nonce: state.nonce,
@@ -681,7 +711,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
 
     let _guard = crate::ExecuteTxGuard::new(pool_addr.clone())
         .ok_or(format!("Pool {0} Executing", pool_addr).to_string())?;
-    let pool = crate::with_pool(&pool_address, |p| p.clone())
+    let mut pool = crate::with_pool(&pool_address, |p| p.clone())
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
         "add_liquidity" => {
@@ -708,8 +738,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                     .await
                     .map_err(|e| e.to_string())?;
             }
-            crate::with_pool_mut(pool_address, |p| {
-                let mut pool = p.expect("already checked in pre_add_liquidity;qed");
+            crate::with_pool_mut(pool_address, |_| {
                 pool.commit(new_state);
                 Ok(Some(pool))
             })
@@ -833,6 +862,27 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         "donate" => {
             let (new_state, consumed) = pool
                 .validate_donate(
+                    txid,
+                    nonce,
+                    pool_utxo_spent,
+                    pool_utxo_received,
+                    input_coins,
+                    output_coins,
+                )
+                .map_err(|e| e.to_string())?;
+            crate::psbt::sign(&mut psbt, &consumed, pool.base_id().to_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
+            crate::with_pool_mut(pool_address, |p| {
+                let mut pool = p.expect("already checked in pre_swap;qed");
+                pool.commit(new_state);
+                Ok(Some(pool))
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        "bi_donate" => {
+            let (new_state, consumed) = pool
+                .validate_bi_donate(
                     txid,
                     nonce,
                     pool_utxo_spent,
@@ -982,6 +1032,12 @@ fn ensure_orchestrator() -> Result<(), String> {
 
 fn ensure_guardian() -> Result<(), String> {
     crate::is_guardian(&ic_cdk::caller())
+        .then(|| ())
+        .ok_or("Access denied".to_string())
+}
+
+fn ensure_pool_creator() -> Result<(), String> {
+    crate::is_pool_creator(&ic_cdk::caller())
         .then(|| ())
         .ok_or("Access denied".to_string())
 }

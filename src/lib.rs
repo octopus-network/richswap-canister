@@ -3,7 +3,10 @@ mod pool;
 mod psbt;
 mod reorg;
 
-use crate::pool::{CoinMeta, LiquidityPool, DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE};
+use crate::pool::{
+    CoinMeta, FeeAdjustMechanism, LiquidityPool, PoolTemplate, DEFAULT_LP_FEE_RATE,
+    DEFAULT_PROTOCOL_FEE_RATE,
+};
 use candid::{CandidType, Deserialize, Principal};
 use ic_cdk::api::management_canister::schnorr::{
     self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument,
@@ -47,6 +50,11 @@ pub const TESTNET_GUARDIAN_PRINCIPAL: &'static str =
     "65xmn-zk27d-l4li6-t6jbb-w42dk-k37sl-tthdg-uaevy-ucb34-uu66z-6qe";
 pub const GUARDIAN_PRINCIPAL: &'static str =
     "v5md3-vs7qy-se4kd-gzd2u-mi225-76rva-rt2ci-ibb2p-petro-2y7aj-hae";
+
+pub const ONETIME_INIT_FEE_RATE: u64 = 990_000; // 99%
+pub const ONETIME_MAX_DECR: u64 = 890_000; // 89%
+pub const ONETIME_DECR_INTERVAL_MS: u64 = 600_000; // 10 min
+pub const ONETIME_DECR_STEP: u64 = 10_000; // 1%
 
 #[derive(Eq, PartialEq, Clone, CandidType, Debug, Deserialize, Serialize)]
 pub struct Output {
@@ -116,6 +124,8 @@ pub enum ExchangeError {
     InvalidLockMessage,
     #[error("operation is forbidden during synching blocks")]
     BlockSyncing,
+    #[error("Couldn't add liquidity into onetime pools and it must be permanently locked")]
+    OnetimePool,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -134,6 +144,7 @@ const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
 const WHITELIST_ID: MemoryId = MemoryId::new(11);
 const PAUSED_ID: MemoryId = MemoryId::new(12);
 const POOLS_MEMORY_ID: MemoryId = MemoryId::new(13);
+const POOL_CREATOR_MEMORY_ID: MemoryId = MemoryId::new(14);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -168,6 +179,9 @@ thread_local! {
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(PAUSED_ID)), false).expect("fail to init a StableCell"));
 
     static GUARDS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+
+    static POOL_CREATOR_WHITELIST: RefCell<StableBTreeMap<Principal, (), Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_CREATOR_MEMORY_ID))));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -284,16 +298,32 @@ pub(crate) async fn sign_prehash_with_schnorr(
 
 pub(crate) fn create_empty_pool(
     meta: CoinMeta,
+    template: PoolTemplate,
     untweaked: Pubkey,
 ) -> Result<String, ExchangeError> {
     if has_pool(&meta.id) {
         return Err(ExchangeError::PoolAlreadyExists);
     }
     let id = meta.id;
+    let fee_adjust_mechanism = match template {
+        PoolTemplate::Standard => None,
+        PoolTemplate::Onetime => Some(FeeAdjustMechanism {
+            start_at: ic_cdk::api::time() / 1_000_000,
+            decr_interval_ms: ONETIME_DECR_INTERVAL_MS,
+            rate_decr_step: ONETIME_DECR_STEP,
+            min_rate: ONETIME_INIT_FEE_RATE - ONETIME_MAX_DECR,
+        }),
+    };
+    let (lp_fee, protocol_fee) = if fee_adjust_mechanism.is_some() {
+        (ONETIME_INIT_FEE_RATE, 10_000)
+    } else {
+        (DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE)
+    };
     let pool = LiquidityPool::new_empty(
         meta,
-        DEFAULT_LP_FEE_RATE,
-        DEFAULT_PROTOCOL_FEE_RATE,
+        fee_adjust_mechanism,
+        lp_fee,
+        protocol_fee,
         untweaked.clone(),
     )
     .expect("didn't set fee rate");
@@ -344,6 +374,10 @@ pub(crate) fn set_fee_collector(addr: String) {
 
 pub(crate) fn is_orchestrator(principal: &Principal) -> bool {
     ORCHESTRATOR.with(|o| o.borrow().get() == principal)
+}
+
+pub(crate) fn is_pool_creator(principal: &Principal) -> bool {
+    POOL_CREATOR_WHITELIST.with_borrow(|w| w.contains_key(principal))
 }
 
 pub(crate) fn is_guardian(principal: &Principal) -> bool {

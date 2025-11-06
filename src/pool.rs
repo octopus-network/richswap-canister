@@ -11,8 +11,6 @@ use std::str::FromStr;
 
 /// represents 0.007
 pub const DEFAULT_LP_FEE_RATE: u64 = 7000;
-// represents 0.0035
-// pub const DEFAULT_LOCKED_LP_FEE_RATE: u64 = 3500;
 /// represents 0.002
 pub const DEFAULT_PROTOCOL_FEE_RATE: u64 = 2000;
 /// each tx's satoshis should be >= 10000
@@ -37,6 +35,33 @@ impl CoinMeta {
     }
 }
 
+/// The `PoolTemplate::Onetime` rule:
+/// - only allow add liquidity once
+/// - lock_time must be u32::MAX
+/// - dynamic fee rate?
+/// - only created by governance
+#[derive(Clone, Copy, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PoolTemplate {
+    #[serde(rename = "standard")]
+    Standard,
+    #[serde(rename = "onetime")]
+    Onetime,
+}
+
+impl Default for PoolTemplate {
+    fn default() -> Self {
+        PoolTemplate::Standard
+    }
+}
+
+#[derive(CandidType, Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FeeAdjustMechanism {
+    pub start_at: u64,
+    pub decr_interval_ms: u64,
+    pub rate_decr_step: u64,
+    pub min_rate: u64,
+}
+
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize)]
 pub struct LiquidityPool {
     pub states: Vec<PoolState>,
@@ -46,6 +71,8 @@ pub struct LiquidityPool {
     pub pubkey: Pubkey,
     pub tweaked: Pubkey,
     pub addr: String,
+    #[serde(default)]
+    pub fee_adjust_mechanism: Option<FeeAdjustMechanism>,
 }
 
 impl LiquidityPool {
@@ -53,13 +80,15 @@ impl LiquidityPool {
         let attr = serde_json::json!({
             "tweaked_key": self.tweaked.to_string(),
             "key_derive_path": vec![self.base_id().to_bytes()],
-            "lp_fee_rate": self.fee_rate,
+            "lp_fee_rate": self.get_lp_fee(),
             "protocol_fee_rate": self.burn_rate,
             "lp_revenue": self.states.last().map(|state| state.lp_earnings.values().map(|v| *v).sum::<u64>()).unwrap_or_default(),
             "protocol_revenue": self.states.last().map(|state| state.incomes).unwrap_or_default(),
             "sqrt_k": self.states.last().map(|state| state.k).unwrap_or_default(),
             "total_btc_donation": self.states.last().map(|state| state.total_btc_donation).unwrap_or_default(),
             "total_rune_donation": self.states.last().map(|state| state.total_rune_donation).unwrap_or_default(),
+            "template": self.fee_adjust_mechanism.map(|_| PoolTemplate::Onetime).unwrap_or(PoolTemplate::Standard),
+            "fee_adjust_mechanism": self.fee_adjust_mechanism,
         });
         serde_json::to_string(&attr).expect("failed to serialize")
     }
@@ -112,9 +141,7 @@ impl PoolState {
 
     pub fn lp(&self, key: &str) -> Liquidity {
         let lock_until = self.lp_locks.get(key).copied().unwrap_or_default();
-        let height = crate::get_max_block().map(|b| b.block_height).unwrap_or(0);
         // if the lock_until is in the past, set it to 0
-        let lock_until = if lock_until < height { 0 } else { lock_until };
         Liquidity {
             user_incomes: self.lp_earnings.get(key).copied().unwrap_or_default(),
             user_share: self.lp.get(key).copied().unwrap_or_default(),
@@ -122,6 +149,29 @@ impl PoolState {
             total_share: self.k,
             lock_until,
         }
+    }
+
+    pub(crate) fn charge_fee(
+        &self,
+        btc: u64,
+        fee_: u64,
+        burn_: u64,
+    ) -> Result<(u64, u64, u64, u64), ExchangeError> {
+        let max_block = crate::get_max_block().ok_or(ExchangeError::BlockSyncing)?;
+        let total_locked = self
+            .lp_locks
+            .iter()
+            .filter(|(_, v)| **v > max_block.block_height)
+            .map(|(k, _)| self.lp.get(k.as_str()).copied().unwrap_or_default())
+            .sum();
+        let fee = btc * fee_ / 1_000_000u64;
+        let locked_fee = (fee as u128)
+            .checked_mul(total_locked)
+            .and_then(|v| v.checked_div(self.k))
+            .ok_or(ExchangeError::Overflow)?;
+        let locked_fee = locked_fee.try_into().map_err(|_| ExchangeError::Overflow)?;
+        let burn = btc * burn_ / 1_000_000u64;
+        Ok((btc - fee - burn, fee - locked_fee, locked_fee, burn))
     }
 }
 
@@ -158,6 +208,7 @@ impl Storable for LiquidityPool {
 impl LiquidityPool {
     pub fn new_empty(
         meta: CoinMeta,
+        mechanism: Option<FeeAdjustMechanism>,
         fee_rate: u64,
         burn_rate: u64,
         untweaked: Pubkey,
@@ -183,6 +234,7 @@ impl LiquidityPool {
             pubkey: untweaked,
             tweaked,
             addr: addr.to_string(),
+            fee_adjust_mechanism: mechanism,
         })
     }
 
@@ -190,11 +242,17 @@ impl LiquidityPool {
         self.meta.id
     }
 
-    /// FIXME for some reasons, we don't save the lp_fee_rate and locked_fee_rate independently
-    pub(crate) fn charge_fee(btc: u64, fee_: u64, burn_: u64) -> (u64, u64, u64, u64) {
-        let fee = btc * fee_ / 1_000_000u64;
-        let burn = btc * burn_ / 1_000_000u64;
-        (btc - fee - burn, fee / 2, fee / 2, burn)
+    pub fn get_lp_fee(&self) -> u64 {
+        match self.fee_adjust_mechanism {
+            Some(mechanism) => {
+                let current_ms = ic_cdk::api::time() / 1_000_000;
+                let decr = (current_ms - mechanism.start_at) / mechanism.decr_interval_ms
+                    * mechanism.rate_decr_step;
+                let decr = u64::min(decr, self.fee_rate - mechanism.min_rate);
+                self.fee_rate - decr
+            }
+            None => self.fee_rate,
+        }
     }
 
     pub(crate) fn liquidity_should_add(
@@ -263,10 +321,10 @@ impl LiquidityPool {
     }
 
     pub(crate) fn validate_adding_liquidity(
-        &self,
+        &mut self,
         txid: Txid,
         nonce: u64,
-        lock_time: u32,
+        mut lock_time: u32,
         pool_utxo_spend: Vec<String>,
         pool_utxo_receive: Vec<Utxo>,
         input_coins: Vec<InputCoin>,
@@ -286,6 +344,15 @@ impl LiquidityPool {
             ))?;
         let x = input_coins[0].coin.clone();
         let y = input_coins[1].coin.clone();
+        // check if `onetime` pool
+        if let Some(mut mechanism) = self.fee_adjust_mechanism {
+            (self.states.is_empty())
+                .then(|| ())
+                .ok_or(ExchangeError::OnetimePool)?;
+            lock_time = u32::MAX;
+            mechanism.start_at = ic_cdk::api::time() / 1_000_000;
+        }
+
         let mut state = self.states.last().cloned().unwrap_or_default();
         // check nonce matches
         (state.nonce == nonce)
@@ -771,13 +838,131 @@ impl LiquidityPool {
         Ok((state, prev_utxo))
     }
 
+    pub(crate) fn wish_to_bi_donate(
+        &self,
+        input_sats: u64,
+        input_rune: CoinBalance,
+    ) -> Result<(CoinBalance, u64), ExchangeError> {
+        if input_rune.id != self.meta.id {
+            return Err(ExchangeError::InvalidPool);
+        }
+        let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
+        let total_sats = recent_state
+            .utxo
+            .as_ref()
+            .map(|u| u.sats)
+            .ok_or(ExchangeError::EmptyPool)?;
+        let rune_supply = recent_state.rune_supply(&self.base_id());
+        (total_sats != 0 && rune_supply != 0)
+            .then(|| ())
+            .ok_or(ExchangeError::EmptyPool)?;
+        Ok((
+            CoinBalance {
+                value: rune_supply + input_rune.value,
+                id: self.meta.id,
+            },
+            total_sats + input_sats,
+        ))
+    }
+
+    pub(crate) fn validate_bi_donate(
+        &self,
+        txid: Txid,
+        nonce: u64,
+        pool_utxo_spend: Vec<String>,
+        pool_utxo_receive: Vec<Utxo>,
+        input_coins: Vec<InputCoin>,
+        output_coins: Vec<OutputCoin>,
+    ) -> Result<(PoolState, Utxo), ExchangeError> {
+        (input_coins.len() == 2 && output_coins.is_empty())
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "invalid input/output coins, donate requires 2 inputs and 0 output".to_string(),
+            ))?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
+        let x = input_coins[0].coin.clone();
+        let y = input_coins[1].coin.clone();
+        let mut state = self
+            .states
+            .last()
+            .cloned()
+            .ok_or(ExchangeError::EmptyPool)?;
+        // check nonce
+        (state.nonce == nonce)
+            .then(|| ())
+            .ok_or(ExchangeError::PoolStateExpired(state.nonce))?;
+        let prev_outpoint =
+            pool_utxo_spend
+                .last()
+                .map(|s| s.clone())
+                .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                    "pool_utxo_spend not found".to_string(),
+                ))?;
+        let prev_utxo = state.utxo.clone().ok_or(ExchangeError::EmptyPool)?;
+        (prev_outpoint == prev_utxo.outpoint()).then(|| ()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_spend/pool state mismatch".to_string()),
+        )?;
+        (pool_utxo_receive.len() == 1)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive not found".to_string(),
+            ))?;
+        let (btc_input, rune_input) = if x.id == CoinId::btc() && y.id != CoinId::btc() {
+            Ok((x, y))
+        } else if x.id != CoinId::btc() && y.id == CoinId::btc() {
+            Ok((y, x))
+        } else {
+            Err(ExchangeError::InvalidSignPsbtArgs(
+                "Invalid inputs: requires 2 different input coins".to_string(),
+            ))
+        }?;
+
+        let (out_rune, out_sats) = self.wish_to_bi_donate(btc_input.value as u64, rune_input)?;
+        let pool_output = pool_utxo_receive.last().map(|s| s.clone()).ok_or(
+            ExchangeError::InvalidSignPsbtArgs("pool_utxo_receive not found".to_string()),
+        )?;
+        ic_cdk::println!(
+            "pool_output: {:?}, out_sats: {}, out_rune({}): {}",
+            pool_output,
+            out_sats,
+            out_rune.id,
+            out_rune.value
+        );
+        (pool_output.sats == out_sats
+            && pool_output.coins.value_of(&self.meta.id) == out_rune.value)
+            .then(|| ())
+            .ok_or(ExchangeError::InvalidSignPsbtArgs(
+                "pool_utxo_receive mismatch with pre_donate".to_string(),
+            ))?;
+        let new_k = crate::sqrt(out_rune.value * (out_sats - state.incomes) as u128);
+        let mut new_lp = BTreeMap::new();
+        for (lp, share) in state.lp.iter() {
+            new_lp.insert(
+                lp.clone(),
+                share
+                    .checked_mul(new_k)
+                    .and_then(|mul| mul.checked_div(state.k))
+                    .ok_or(ExchangeError::Overflow)?,
+            );
+        }
+        let k_adjust = new_lp.values().sum();
+        state.id = Some(txid);
+        state.nonce += 1;
+        state.k = k_adjust;
+        state.lp = new_lp;
+        state.total_btc_donation += btc_input.value as u64;
+        state.utxo = Some(pool_output);
+        Ok((state, prev_utxo))
+    }
+
     pub(crate) fn wish_to_donate(
         &self,
         input_sats: u64,
     ) -> Result<(CoinBalance, u64), ExchangeError> {
-        (input_sats >= crate::min_sats())
-            .then(|| ())
-            .ok_or(ExchangeError::TooSmallFunds)?;
         let recent_state = self.states.last().ok_or(ExchangeError::EmptyPool)?;
         let total_sats = recent_state
             .utxo
@@ -1040,7 +1225,7 @@ impl LiquidityPool {
                 .then(|| ())
                 .ok_or(ExchangeError::FundsLimitExceeded)?;
             let (input_amount, lp_fee, locked_lp_fee, protocol_fee) =
-                Self::charge_fee(input_btc, self.fee_rate, self.burn_rate);
+                recent_state.charge_fee(input_btc, self.fee_rate, self.burn_rate)?;
             let rune_remains = btc_supply
                 .checked_add(input_amount)
                 .and_then(|sum| k.checked_div(sum as u128))
@@ -1075,7 +1260,7 @@ impl LiquidityPool {
             let pool_btc_remains: u64 = pool_btc_remains.try_into().expect("BTC amount overflow");
             let pre_charge = btc_supply - pool_btc_remains;
             let (offer, lp_fee, locked_lp_fee, protocol_fee) =
-                Self::charge_fee(pre_charge, self.fee_rate, self.burn_rate);
+                recent_state.charge_fee(pre_charge, self.fee_rate, self.burn_rate)?;
             // this is the actual remains
             let pool_btc_remains = btc_supply - offer - protocol_fee - locked_lp_fee;
             // plus this to ensure the pool remains >= 546
@@ -1207,13 +1392,21 @@ impl LiquidityPool {
         let max_height = crate::get_max_block()
             .map(|b| b.block_height)
             .unwrap_or_default();
+        let total_locked = state
+            .lp_locks
+            .iter()
+            .filter(|(_, v)| **v > max_height)
+            .map(|(k, _)| state.lp.get(k.as_str()).copied().unwrap_or_default())
+            .sum();
+
         // locked LPs have extra revenue
         for (k, _) in state.lp_locks.iter().filter(|(_, u)| **u > max_height) {
+            // the share means locked/total_locked
             if let Some(fee) = state
                 .lp
                 .get(k)
                 .and_then(|share| share.checked_mul(locked_lp_fee as u128))
-                .and_then(|mul| mul.checked_div(state.k))
+                .and_then(|mul| mul.checked_div(total_locked))
             {
                 let fee_in_sats = fee as u64;
                 state
@@ -1359,4 +1552,23 @@ pub fn test_price_limit() {
     let delta = LiquidityPool::ensure_price_limit(sats, rune, sats1, rune1);
     assert!(delta.is_ok());
     assert_eq!(delta.unwrap(), 909);
+}
+
+#[test]
+pub fn test_fee_adjust() {
+    let mechanism = FeeAdjustMechanism {
+        start_at: 1761368803654,
+        decr_interval_ms: 10 * 60 * 1000,
+        rate_decr_step: 10_000,
+        min_rate: 100_000,
+    };
+    let current_ms = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let decr =
+        (current_ms - mechanism.start_at) / mechanism.decr_interval_ms * mechanism.rate_decr_step;
+    let decr = u64::min(decr, 990_000 - mechanism.min_rate);
+    let fee_rate = 990_000 - decr;
+    assert_eq!(fee_rate, 100_000);
 }
