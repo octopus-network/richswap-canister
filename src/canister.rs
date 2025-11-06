@@ -191,12 +191,11 @@ pub async fn create_pool(rune_id: CoinId, template: PoolTemplate) -> Result<Stri
     }
 }
 
-#[update]
+#[update(guard = "ensure_pool_creator")]
 pub async fn create_with_template(
     rune_id: CoinId,
     template: PoolTemplate,
 ) -> Result<String, ExchangeError> {
-    // TODO whitelist
     create_pool(rune_id, template).await
 }
 
@@ -1033,6 +1032,12 @@ fn ensure_orchestrator() -> Result<(), String> {
 
 fn ensure_guardian() -> Result<(), String> {
     crate::is_guardian(&ic_cdk::caller())
+        .then(|| ())
+        .ok_or("Access denied".to_string())
+}
+
+fn ensure_pool_creator() -> Result<(), String> {
+    crate::is_pool_creator(&ic_cdk::caller())
         .then(|| ())
         .ok_or("Access denied".to_string())
 }

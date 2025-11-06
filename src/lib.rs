@@ -144,6 +144,7 @@ const TX_RECORDS_ID: MemoryId = MemoryId::new(9);
 const WHITELIST_ID: MemoryId = MemoryId::new(11);
 const PAUSED_ID: MemoryId = MemoryId::new(12);
 const POOLS_MEMORY_ID: MemoryId = MemoryId::new(13);
+const POOL_CREATOR_MEMORY_ID: MemoryId = MemoryId::new(14);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -178,6 +179,9 @@ thread_local! {
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(PAUSED_ID)), false).expect("fail to init a StableCell"));
 
     static GUARDS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+
+    static POOL_CREATOR_WHITELIST: RefCell<StableBTreeMap<Principal, (), Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_CREATOR_MEMORY_ID))));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -370,6 +374,10 @@ pub(crate) fn set_fee_collector(addr: String) {
 
 pub(crate) fn is_orchestrator(principal: &Principal) -> bool {
     ORCHESTRATOR.with(|o| o.borrow().get() == principal)
+}
+
+pub(crate) fn is_pool_creator(principal: &Principal) -> bool {
+    POOL_CREATOR_WHITELIST.with_borrow(|w| w.contains_key(principal))
 }
 
 pub(crate) fn is_guardian(principal: &Principal) -> bool {
