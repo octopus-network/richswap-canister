@@ -1300,7 +1300,7 @@ impl LiquidityPool {
         pool_utxo_receive: Vec<Utxo>,
         input_coins: Vec<InputCoin>,
         output_coins: Vec<OutputCoin>,
-    ) -> Result<(PoolState, Utxo), ExchangeError> {
+    ) -> Result<(PoolState, Utxo, serde_json::Value), ExchangeError> {
         (input_coins.len() == 1 && output_coins.len() == 1)
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
@@ -1437,7 +1437,8 @@ impl LiquidityPool {
         state.nonce += 1;
         state.incomes += protocol_fee;
         state.id = Some(txid);
-        Ok((state, prev_utxo))
+        let log = serde_json::json!({"pool": self.addr, "lp_fee": lp_fee, "protocol_fee": protocol_fee, "locked_lp_fee": locked_lp_fee});
+        Ok((state, prev_utxo, log))
     }
 
     pub(crate) async fn merge_utxos(

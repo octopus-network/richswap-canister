@@ -37,6 +37,8 @@ pub const TESTNET_RUNE_INDEXER_CANISTER: &'static str = "f2dwm-caaaa-aaaao-qjxlq
 pub const BTC_CANISTER: &'static str = "ghsi2-tqaaa-aaaan-aaaca-cai";
 pub const TESTNET_BTC_CANISTER: &'static str = "g4xu7-jiaaa-aaaan-aaaaq-cai";
 pub const ORCHESTRATOR_CANISTER: &'static str = "kqs64-paaaa-aaaar-qamza-cai";
+pub const POOL_CREATOR_MANAGER: &'static str =
+    "kcbkg-xe6mr-ahw5e-vtnl5-jzrlt-peuis-j4fuh-64oqd-a36ns-vh4z3-xae";
 // to HOPE_YOU_GET_RICH
 pub const DEFAULT_FEE_COLLECTOR: &'static str =
     "bc1ptnxf8aal3apeg8r4zysr6k2mhadg833se2dm4nssl7drjlqdh2jqa4tk3p";
@@ -145,6 +147,7 @@ const WHITELIST_ID: MemoryId = MemoryId::new(11);
 const PAUSED_ID: MemoryId = MemoryId::new(12);
 const POOLS_MEMORY_ID: MemoryId = MemoryId::new(13);
 const POOL_CREATOR_MEMORY_ID: MemoryId = MemoryId::new(14);
+const SWAP_EXECUTE_LOG_MEMORY_ID: MemoryId = MemoryId::new(15);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -182,6 +185,9 @@ thread_local! {
 
     static POOL_CREATOR_WHITELIST: RefCell<StableBTreeMap<Principal, (), Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(POOL_CREATOR_MEMORY_ID))));
+
+    static SWAP_EXECUTE_LOG: RefCell<StableBTreeMap<Txid, String, Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(SWAP_EXECUTE_LOG_MEMORY_ID))));
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
@@ -389,6 +395,10 @@ pub(crate) fn is_guardian(principal: &Principal) -> bool {
             principal == &Principal::from_text(GUARDIAN_PRINCIPAL).unwrap()
         }
     }
+}
+
+pub(crate) fn is_pool_creator_manager(principal: &Principal) -> bool {
+    principal == &Principal::from_text(POOL_CREATOR_MANAGER).unwrap()
 }
 
 pub(crate) fn set_orchestrator(principal: Principal) {
