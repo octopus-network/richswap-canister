@@ -171,6 +171,7 @@ type WithdrawalOffer = record {
   user_outputs : vec CoinBalance;
 };
 service : {
+  add_pool_creator_principal : (principal) -> ();
   blocks_tx_records_count : () -> (Result) query;
   create : (text) -> (Result_1);
   create_with_template : (text, PoolTemplate) -> (Result_1);
@@ -179,6 +180,7 @@ service : {
   execute_tx : (ExecuteTxArgs) -> (Result_3);
   get_all_lp : (text) -> (Result_4) query;
   get_block : (nat32) -> (opt NewBlockInfo) query;
+  get_execute_log : (text) -> (text) query;
   get_fee_collector : () -> (text) query;
   get_lp : (text, text) -> (Result_5) query;
   get_max_block : () -> (opt NewBlockInfo) query;

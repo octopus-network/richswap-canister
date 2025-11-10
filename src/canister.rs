@@ -24,6 +24,18 @@ pub fn set_orchestrator(principal: Principal) {
     crate::set_orchestrator(principal);
 }
 
+#[update(guard = "ensure_pool_creator_manager")]
+pub fn add_pool_creator_principal(principal: Principal) {
+    crate::POOL_CREATOR_WHITELIST.with_borrow_mut(|set| {
+        set.insert(principal, ());
+    });
+}
+
+#[query]
+pub fn get_execute_log(txid: Txid) -> String {
+    crate::SWAP_EXECUTE_LOG.with_borrow(|m| m.get(&txid).unwrap_or("[]".to_string()))
+}
+
 #[update(guard = "ensure_owner")]
 pub fn set_donation_amount(
     addr: String,
@@ -839,7 +851,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             .map_err(|e| e.to_string())?;
         }
         "swap" => {
-            let (new_state, consumed) = pool
+            let (new_state, consumed, log) = pool
                 .validate_swap(
                     txid,
                     nonce,
@@ -858,6 +870,15 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                 Ok(Some(pool))
             })
             .map_err(|e| e.to_string())?;
+            crate::SWAP_EXECUTE_LOG.with_borrow_mut(|logs| {
+                let mut swap = logs
+                    .get(&txid)
+                    .map(|s| serde_json::from_str(&s).ok())
+                    .flatten()
+                    .unwrap_or(serde_json::json!([]));
+                swap.as_array_mut().unwrap().push(log);
+                logs.insert(txid, swap.to_string());
+            });
         }
         "donate" => {
             let (new_state, consumed) = pool
@@ -1038,6 +1059,12 @@ fn ensure_guardian() -> Result<(), String> {
 
 fn ensure_pool_creator() -> Result<(), String> {
     crate::is_pool_creator(&ic_cdk::caller())
+        .then(|| ())
+        .ok_or("Access denied".to_string())
+}
+
+fn ensure_pool_creator_manager() -> Result<(), String> {
+    crate::is_pool_creator_manager(&ic_cdk::caller())
         .then(|| ())
         .ok_or("Access denied".to_string())
 }
