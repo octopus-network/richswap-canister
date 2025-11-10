@@ -117,7 +117,7 @@ type PoolState = record {
   nonce : nat64;
   lp_locks : vec record { text; nat32 };
 };
-type PoolTemplate = variant { onetime; standard };
+type PoolTemplate = variant { NFTStrategy; Satsman; Standard };
 type PreClaimOutput = record {
   nonce : nat64;
   claim_sats : nat64;

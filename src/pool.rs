@@ -13,6 +13,11 @@ use std::str::FromStr;
 pub const DEFAULT_LP_FEE_RATE: u64 = 7000;
 /// represents 0.002
 pub const DEFAULT_PROTOCOL_FEE_RATE: u64 = 2000;
+pub const ONETIME_INIT_FEE_RATE: u64 = 990_000; // 99%
+pub const ONETIME_MAX_DECR: u64 = 890_000; // 89%
+pub const ONETIME_DECR_INTERVAL_MS: u64 = 600_000; // 10 min
+pub const ONETIME_DECR_STEP: u64 = 10_000; // 1%
+
 /// each tx's satoshis should be >= 10000
 pub const MIN_BTC_VALUE: u64 = 10000;
 /// each tx's staoshis should be <= 10000000;
@@ -42,10 +47,34 @@ impl CoinMeta {
 /// - only created by governance
 #[derive(Clone, Copy, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum PoolTemplate {
-    #[serde(rename = "standard")]
+    #[serde(rename = "Standard")]
     Standard,
-    #[serde(rename = "onetime")]
-    Onetime,
+    #[serde(rename = "NFTStrategy")]
+    NFTStrategy,
+    #[serde(rename = "Satsman")]
+    Satsman,
+}
+
+impl PoolTemplate {
+    pub fn fee_adjustment_mechanism(&self) -> Option<FeeAdjustMechanism> {
+        match *self {
+            PoolTemplate::Standard | PoolTemplate::Satsman => None,
+            PoolTemplate::NFTStrategy => Some(FeeAdjustMechanism {
+                start_at: ic_cdk::api::time() / 1_000_000,
+                decr_interval_ms: ONETIME_DECR_INTERVAL_MS,
+                rate_decr_step: ONETIME_DECR_STEP,
+                min_rate: ONETIME_INIT_FEE_RATE - ONETIME_MAX_DECR,
+            }),
+        }
+    }
+
+    pub fn fee_rate(&self) -> (u64, u64) {
+        match *self {
+            PoolTemplate::Standard => (DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE),
+            PoolTemplate::Satsman => (1_120_000, 320_000),
+            PoolTemplate::NFTStrategy => (ONETIME_INIT_FEE_RATE, 10_000),
+        }
+    }
 }
 
 impl Default for PoolTemplate {
@@ -73,6 +102,8 @@ pub struct LiquidityPool {
     pub addr: String,
     #[serde(default)]
     pub fee_adjust_mechanism: Option<FeeAdjustMechanism>,
+    #[serde(default)]
+    pub template: PoolTemplate,
 }
 
 impl LiquidityPool {
@@ -87,7 +118,7 @@ impl LiquidityPool {
             "sqrt_k": self.states.last().map(|state| state.k).unwrap_or_default(),
             "total_btc_donation": self.states.last().map(|state| state.total_btc_donation).unwrap_or_default(),
             "total_rune_donation": self.states.last().map(|state| state.total_rune_donation).unwrap_or_default(),
-            "template": self.fee_adjust_mechanism.map(|_| PoolTemplate::Onetime).unwrap_or(PoolTemplate::Standard),
+            "template": self.template,
             "fee_adjust_mechanism": self.fee_adjust_mechanism,
         });
         serde_json::to_string(&attr).expect("failed to serialize")
@@ -208,13 +239,11 @@ impl Storable for LiquidityPool {
 impl LiquidityPool {
     pub fn new_empty(
         meta: CoinMeta,
-        mechanism: Option<FeeAdjustMechanism>,
-        fee_rate: u64,
-        burn_rate: u64,
+        template: PoolTemplate,
+        // fee_rate: u64,
+        // burn_rate: u64,
         untweaked: Pubkey,
     ) -> Option<Self> {
-        (fee_rate <= 1_000_000).then(|| ())?;
-        (burn_rate <= 1_000_000).then(|| ())?;
         let tweaked = crate::tweak_pubkey_with_empty(untweaked.clone());
         let key = ree_types::bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(
             tweaked.to_x_only_public_key(),
@@ -226,6 +255,10 @@ impl LiquidityPool {
                 let addr = Address::p2tr_tweaked(key, Network::Bitcoin);
             }
         }
+        let mechanism = template.fee_adjustment_mechanism();
+        let (fee_rate, burn_rate) = template.fee_rate();
+        (fee_rate <= 1_000_000).then(|| ())?;
+        (burn_rate <= 1_000_000).then(|| ())?;
         Some(Self {
             states: vec![],
             fee_rate,
@@ -235,6 +268,7 @@ impl LiquidityPool {
             tweaked,
             addr: addr.to_string(),
             fee_adjust_mechanism: mechanism,
+            template,
         })
     }
 
