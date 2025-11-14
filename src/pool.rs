@@ -71,7 +71,7 @@ impl PoolTemplate {
     pub fn fee_rate(&self) -> (u64, u64) {
         match *self {
             PoolTemplate::Standard => (DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE),
-            PoolTemplate::Satsman => (1_120_000, 320_000),
+            PoolTemplate::Satsman => (11200, 3200),
             PoolTemplate::NFTStrategy => (ONETIME_INIT_FEE_RATE, 10_000),
         }
     }

@@ -299,24 +299,7 @@ pub(crate) fn create_empty_pool(
     template: PoolTemplate,
     untweaked: Pubkey,
 ) -> Result<String, ExchangeError> {
-    if has_pool(&meta.id) {
-        return Err(ExchangeError::PoolAlreadyExists);
-    }
     let id = meta.id;
-    // let fee_adjust_mechanism = match template {
-    //     PoolTemplate::Standard => None,
-    //     PoolTemplate::Onetime => Some(FeeAdjustMechanism {
-    //         start_at: ic_cdk::api::time() / 1_000_000,
-    //         decr_interval_ms: ONETIME_DECR_INTERVAL_MS,
-    //         rate_decr_step: ONETIME_DECR_STEP,
-    //         min_rate: ONETIME_INIT_FEE_RATE - ONETIME_MAX_DECR,
-    //     }),
-    // };
-    // let (lp_fee, protocol_fee) = if fee_adjust_mechanism.is_some() {
-    //     (ONETIME_INIT_FEE_RATE, 10_000)
-    // } else {
-    //     (DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE)
-    // };
     let pool =
         LiquidityPool::new_empty(meta, template, untweaked.clone()).expect("didn't set fee rate");
     let addr = pool.addr.clone();
