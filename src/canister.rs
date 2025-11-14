@@ -169,38 +169,48 @@ pub fn get_tx_affected(txid: Txid) -> Option<TxRecord> {
 pub async fn create_pool(rune_id: CoinId, template: PoolTemplate) -> Result<String, ExchangeError> {
     crate::ensure_online()?;
     match crate::with_pool_name(&rune_id) {
-        Some(addr) => crate::with_pool(&addr, |pool| {
-            pool.as_ref()
-                .filter(|p| p.states.is_empty())
-                .map(|p| p.addr.clone())
-                .ok_or(ExchangeError::PoolAlreadyExists)
-        }),
-        None => {
-            let untweaked_pubkey = crate::request_schnorr_key("key_1", rune_id.to_bytes()).await?;
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "testnet")] {
-                    let principal = Principal::from_str(crate::TESTNET_RUNE_INDEXER_CANISTER).unwrap();
-                } else {
-                    let principal = Principal::from_str(crate::RUNE_INDEXER_CANISTER).unwrap();
+        Some(addr) => {
+            let maybe_pool = crate::with_pool(&addr, |p| p.clone());
+            match maybe_pool {
+                Some(p) => {
+                    if p.states.is_empty() {
+                        create_new(rune_id, template).await
+                    } else {
+                        Err(ExchangeError::PoolAlreadyExists)
+                    }
                 }
+                None => create_new(rune_id, template).await,
             }
-            let indexer = RuneIndexer(principal);
-            let (entry,): (Option<RuneEntry>,) = indexer
-                .get_rune_by_id(rune_id.to_string())
-                .await
-                .inspect_err(|e| log!(ERROR, "Error fetching rune indexer: {}", e.1))
-                .map_err(|_| ExchangeError::FetchRuneIndexerError)?;
-            let name = entry
-                .map(|e| e.spaced_rune)
-                .ok_or(ExchangeError::InvalidRuneId)?;
-            let meta = CoinMeta {
-                id: rune_id,
-                symbol: name,
-                min_amount: 1,
-            };
-            crate::create_empty_pool(meta, template, untweaked_pubkey.clone())
+        }
+        None => create_new(rune_id, template).await,
+    }
+}
+
+async fn create_new(rune_id: CoinId, template: PoolTemplate) -> Result<String, ExchangeError> {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "testnet")] {
+            let untweaked_pubkey = crate::request_schnorr_key("test_key_1", rune_id.to_bytes()).await?;
+            let principal = Principal::from_str(crate::TESTNET_RUNE_INDEXER_CANISTER).unwrap();
+        } else {
+            let untweaked_pubkey = crate::request_schnorr_key("key_1", rune_id.to_bytes()).await?;
+            let principal = Principal::from_str(crate::RUNE_INDEXER_CANISTER).unwrap();
         }
     }
+    let indexer = RuneIndexer(principal);
+    let (entry,): (Option<RuneEntry>,) = indexer
+        .get_rune_by_id(rune_id.to_string())
+        .await
+        .inspect_err(|e| log!(ERROR, "Error fetching rune indexer: {}", e.1))
+        .map_err(|_| ExchangeError::FetchRuneIndexerError)?;
+    let name = entry
+        .map(|e| e.spaced_rune)
+        .ok_or(ExchangeError::InvalidRuneId)?;
+    let meta = CoinMeta {
+        id: rune_id,
+        symbol: name,
+        min_amount: 1,
+    };
+    crate::create_empty_pool(meta, template, untweaked_pubkey.clone())
 }
 
 #[update(guard = "ensure_pool_creator")]
