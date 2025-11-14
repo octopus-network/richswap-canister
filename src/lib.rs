@@ -3,10 +3,7 @@ mod pool;
 mod psbt;
 mod reorg;
 
-use crate::pool::{
-    CoinMeta, FeeAdjustMechanism, LiquidityPool, PoolTemplate, DEFAULT_LP_FEE_RATE,
-    DEFAULT_PROTOCOL_FEE_RATE,
-};
+use crate::pool::{CoinMeta, LiquidityPool, PoolTemplate};
 use candid::{CandidType, Deserialize, Principal};
 use ic_cdk::api::management_canister::schnorr::{
     self, SchnorrAlgorithm, SchnorrKeyId, SchnorrPublicKeyArgument,
@@ -52,11 +49,6 @@ pub const TESTNET_GUARDIAN_PRINCIPAL: &'static str =
     "65xmn-zk27d-l4li6-t6jbb-w42dk-k37sl-tthdg-uaevy-ucb34-uu66z-6qe";
 pub const GUARDIAN_PRINCIPAL: &'static str =
     "v5md3-vs7qy-se4kd-gzd2u-mi225-76rva-rt2ci-ibb2p-petro-2y7aj-hae";
-
-pub const ONETIME_INIT_FEE_RATE: u64 = 990_000; // 99%
-pub const ONETIME_MAX_DECR: u64 = 890_000; // 89%
-pub const ONETIME_DECR_INTERVAL_MS: u64 = 600_000; // 10 min
-pub const ONETIME_DECR_STEP: u64 = 10_000; // 1%
 
 #[derive(Eq, PartialEq, Clone, CandidType, Debug, Deserialize, Serialize)]
 pub struct Output {
@@ -307,32 +299,9 @@ pub(crate) fn create_empty_pool(
     template: PoolTemplate,
     untweaked: Pubkey,
 ) -> Result<String, ExchangeError> {
-    if has_pool(&meta.id) {
-        return Err(ExchangeError::PoolAlreadyExists);
-    }
     let id = meta.id;
-    let fee_adjust_mechanism = match template {
-        PoolTemplate::Standard => None,
-        PoolTemplate::Onetime => Some(FeeAdjustMechanism {
-            start_at: ic_cdk::api::time() / 1_000_000,
-            decr_interval_ms: ONETIME_DECR_INTERVAL_MS,
-            rate_decr_step: ONETIME_DECR_STEP,
-            min_rate: ONETIME_INIT_FEE_RATE - ONETIME_MAX_DECR,
-        }),
-    };
-    let (lp_fee, protocol_fee) = if fee_adjust_mechanism.is_some() {
-        (ONETIME_INIT_FEE_RATE, 10_000)
-    } else {
-        (DEFAULT_LP_FEE_RATE, DEFAULT_PROTOCOL_FEE_RATE)
-    };
-    let pool = LiquidityPool::new_empty(
-        meta,
-        fee_adjust_mechanism,
-        lp_fee,
-        protocol_fee,
-        untweaked.clone(),
-    )
-    .expect("didn't set fee rate");
+    let pool =
+        LiquidityPool::new_empty(meta, template, untweaked.clone()).expect("didn't set fee rate");
     let addr = pool.addr.clone();
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, addr.clone());
