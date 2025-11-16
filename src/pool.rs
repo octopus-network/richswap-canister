@@ -364,6 +364,7 @@ impl LiquidityPool {
         input_coins: Vec<InputCoin>,
         output_coins: Vec<OutputCoin>,
         initiator: String,
+        beneficiary: Option<String>,
     ) -> Result<(PoolState, Option<Utxo>), ExchangeError> {
         (input_coins.len() == 2 && output_coins.is_empty())
             .then(|| ())
@@ -376,15 +377,20 @@ impl LiquidityPool {
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "pool_utxo_receive not found".to_string(),
             ))?;
+        let beneficiary = beneficiary.unwrap_or(initiator.clone());
         let x = input_coins[0].coin.clone();
         let y = input_coins[1].coin.clone();
         // check if `onetime` pool
+        // TODO change to NFT strategy pool
         if let Some(mut mechanism) = self.fee_adjust_mechanism {
             (self.states.is_empty())
                 .then(|| ())
                 .ok_or(ExchangeError::OnetimePool)?;
             lock_time = u32::MAX;
             mechanism.start_at = ic_cdk::api::time() / 1_000_000;
+        }
+        if self.template == PoolTemplate::Satsman {
+            lock_time = u32::MAX;
         }
 
         let mut state = self.states.last().cloned().unwrap_or_default();
@@ -477,7 +483,7 @@ impl LiquidityPool {
                 .unwrap_or(u32::MAX);
             state
                 .lp_locks
-                .entry(initiator.clone())
+                .entry(beneficiary.clone())
                 .and_modify(|t| {
                     if *t < lock_until {
                         *t = lock_until;
@@ -488,7 +494,7 @@ impl LiquidityPool {
         state.utxo = Some(pool_output);
         state
             .lp
-            .entry(initiator)
+            .entry(beneficiary)
             .and_modify(|v| *v += user_mint)
             .or_insert(user_mint);
         state.k += user_mint;
