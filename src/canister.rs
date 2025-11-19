@@ -31,19 +31,6 @@ pub fn add_pool_creator_principal(principal: Principal) {
     });
 }
 
-#[update(guard = "ensure_pool_creator_manager")]
-pub fn remove_pool(addr: String) -> Result<(), ExchangeError> {
-    crate::with_pool_mut(addr, |p| {
-        let pool = p.ok_or(ExchangeError::InvalidPool)?;
-        if pool.states.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(pool))
-        }
-    })?;
-    Ok(())
-}
-
 #[query]
 pub fn get_execute_log(txid: Txid) -> String {
     crate::SWAP_EXECUTE_LOG.with_borrow(|m| m.get(&txid).unwrap_or("[]".to_string()))
@@ -231,6 +218,19 @@ pub async fn create_with_template(
     template: PoolTemplate,
 ) -> Result<String, ExchangeError> {
     create_pool(rune_id, template).await
+}
+
+#[update(guard = "ensure_pool_creator")]
+pub fn remove_pool(addr: String) -> Result<(), ExchangeError> {
+    crate::with_pool_mut(addr, |p| {
+        let pool = p.ok_or(ExchangeError::InvalidPool)?;
+        if pool.states.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(pool))
+        }
+    })?;
+    Ok(())
 }
 
 #[update]
