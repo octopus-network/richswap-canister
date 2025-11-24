@@ -389,9 +389,6 @@ impl LiquidityPool {
             lock_time = u32::MAX;
             mechanism.start_at = ic_cdk::api::time() / 1_000_000;
         }
-        if self.template == PoolTemplate::Satsman {
-            lock_time = u32::MAX;
-        }
 
         let mut state = self.states.last().cloned().unwrap_or_default();
         // check nonce matches
