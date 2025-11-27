@@ -187,12 +187,11 @@ pub async fn create_pool(rune_id: CoinId, template: PoolTemplate) -> Result<Stri
 }
 
 async fn create_new(rune_id: CoinId, template: PoolTemplate) -> Result<String, ExchangeError> {
+    let untweaked_pubkey = crate::request_schnorr_key("key_1", rune_id.to_bytes()).await?;
     cfg_if::cfg_if! {
         if #[cfg(feature = "testnet")] {
-            let untweaked_pubkey = crate::request_schnorr_key("test_key_1", rune_id.to_bytes()).await?;
             let principal = Principal::from_str(crate::TESTNET_RUNE_INDEXER_CANISTER).unwrap();
         } else {
-            let untweaked_pubkey = crate::request_schnorr_key("key_1", rune_id.to_bytes()).await?;
             let principal = Principal::from_str(crate::RUNE_INDEXER_CANISTER).unwrap();
         }
     }
@@ -219,6 +218,19 @@ pub async fn create_with_template(
     template: PoolTemplate,
 ) -> Result<String, ExchangeError> {
     create_pool(rune_id, template).await
+}
+
+#[update(guard = "ensure_pool_creator")]
+pub fn remove_pool(addr: String) -> Result<(), ExchangeError> {
+    crate::with_pool_mut(addr, |p| {
+        let pool = p.ok_or(ExchangeError::InvalidPool)?;
+        if pool.states.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(pool))
+        }
+    })?;
+    Ok(())
 }
 
 #[update]
@@ -703,6 +715,12 @@ pub fn new_block(args: NewBlockArgs) -> NewBlockResponse {
     Ok(())
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AddLiquidityIntentionArgs {
+    pub beneficiary: Option<String>,
+    pub lock_time: u32,
+}
+
 /// REE API
 #[update(guard = "ensure_orchestrator")]
 pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
@@ -737,12 +755,27 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
         .ok_or(ExchangeError::InvalidPool.to_string())?;
     match intention.action.as_ref() {
         "add_liquidity" => {
-            let lock_time = match action_params.is_empty() {
-                true => 0,
-                false => action_params
-                    .parse()
-                    .map_err(|_| "action params \"lock_time\" required")?,
-            };
+            let intention_args = match action_params.is_empty() {
+                true => Ok(AddLiquidityIntentionArgs {
+                    beneficiary: None,
+                    lock_time: 0,
+                }),
+                false => {
+                    let lock_time_comp: Result<u32, _> = action_params.parse();
+                    match lock_time_comp {
+                        Ok(lock_time) => Ok(AddLiquidityIntentionArgs {
+                            beneficiary: None,
+                            lock_time,
+                        }),
+                        Err(_) => serde_json::from_str(&action_params)
+                            .map_err(|_| "invalid action_params for add_liquidity".to_string()),
+                    }
+                }
+            }?;
+            let AddLiquidityIntentionArgs {
+                beneficiary,
+                lock_time,
+            } = intention_args;
             let (new_state, consumed) = pool
                 .validate_adding_liquidity(
                     txid,
@@ -753,6 +786,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
                     input_coins,
                     output_coins,
                     initiator,
+                    beneficiary,
                 )
                 .map_err(|e| e.to_string())?;
             if let Some(ref utxo) = consumed {

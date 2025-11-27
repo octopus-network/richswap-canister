@@ -243,6 +243,7 @@ pub(crate) fn find_pool(addr: &String) -> Option<LiquidityPool> {
     with_pool(addr, |p| p.clone())
 }
 
+#[allow(unused)]
 pub(crate) fn has_pool(id: &CoinId) -> bool {
     POOL_TOKENS.with_borrow(|p| p.contains_key(&id))
 }
@@ -250,10 +251,6 @@ pub(crate) fn has_pool(id: &CoinId) -> bool {
 pub(crate) fn with_pool_name(id: &CoinId) -> Option<String> {
     POOL_TOKENS.with_borrow(|p| p.get(&id).clone())
 }
-
-// pub(crate) fn with_pool_addr(addr: &String) -> Option<Pubkey> {
-//     POOL_ADDR.with_borrow(|p| p.get(addr))
-// }
 
 pub(crate) fn tweak_pubkey_with_empty(untweaked: Pubkey) -> Pubkey {
     let secp = Secp256k1::new();

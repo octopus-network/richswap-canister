@@ -140,6 +140,8 @@ pub struct PoolState {
     pub lp_locks: BTreeMap<String, u32>,
     #[serde(default)]
     pub locked_lp_revenue: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub claimed: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -149,6 +151,7 @@ pub struct Liquidity {
     pub locked_revenue: u64,
     pub total_share: u128,
     pub lock_until: u32,
+    pub locked_revenue_claimed: u64,
 }
 
 impl PoolState {
@@ -179,6 +182,7 @@ impl PoolState {
             locked_revenue: self.locked_lp_revenue.get(key).copied().unwrap_or_default(),
             total_share: self.k,
             lock_until,
+            locked_revenue_claimed: self.claimed.get(key).copied().unwrap_or_default(),
         }
     }
 
@@ -364,6 +368,7 @@ impl LiquidityPool {
         input_coins: Vec<InputCoin>,
         output_coins: Vec<OutputCoin>,
         initiator: String,
+        beneficiary: Option<String>,
     ) -> Result<(PoolState, Option<Utxo>), ExchangeError> {
         (input_coins.len() == 2 && output_coins.is_empty())
             .then(|| ())
@@ -376,9 +381,11 @@ impl LiquidityPool {
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "pool_utxo_receive not found".to_string(),
             ))?;
+        let beneficiary = beneficiary.unwrap_or(initiator.clone());
         let x = input_coins[0].coin.clone();
         let y = input_coins[1].coin.clone();
         // check if `onetime` pool
+        // TODO change to NFT strategy pool
         if let Some(mut mechanism) = self.fee_adjust_mechanism {
             (self.states.is_empty())
                 .then(|| ())
@@ -477,7 +484,7 @@ impl LiquidityPool {
                 .unwrap_or(u32::MAX);
             state
                 .lp_locks
-                .entry(initiator.clone())
+                .entry(beneficiary.clone())
                 .and_modify(|t| {
                     if *t < lock_until {
                         *t = lock_until;
@@ -488,7 +495,7 @@ impl LiquidityPool {
         state.utxo = Some(pool_output);
         state
             .lp
-            .entry(initiator)
+            .entry(beneficiary)
             .and_modify(|v| *v += user_mint)
             .or_insert(user_mint);
         state.k += user_mint;
@@ -689,6 +696,11 @@ impl LiquidityPool {
 
         state.utxo = Some(pool_output);
         state.locked_lp_revenue.remove(&beneficiary);
+        state
+            .claimed
+            .entry(beneficiary)
+            .and_modify(|v| *v += claim_sats)
+            .or_insert(claim_sats);
         state.nonce += 1;
         state.id = Some(txid);
         Ok((state, prev_utxo))
