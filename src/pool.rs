@@ -140,6 +140,8 @@ pub struct PoolState {
     pub lp_locks: BTreeMap<String, u32>,
     #[serde(default)]
     pub locked_lp_revenue: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub claimed: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, CandidType, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -149,6 +151,7 @@ pub struct Liquidity {
     pub locked_revenue: u64,
     pub total_share: u128,
     pub lock_until: u32,
+    pub locked_revenue_claimed: u64,
 }
 
 impl PoolState {
@@ -179,6 +182,7 @@ impl PoolState {
             locked_revenue: self.locked_lp_revenue.get(key).copied().unwrap_or_default(),
             total_share: self.k,
             lock_until,
+            locked_revenue_claimed: self.claimed.get(key).copied().unwrap_or_default(),
         }
     }
 
@@ -692,6 +696,11 @@ impl LiquidityPool {
 
         state.utxo = Some(pool_output);
         state.locked_lp_revenue.remove(&beneficiary);
+        state
+            .claimed
+            .entry(beneficiary)
+            .and_modify(|v| *v += claim_sats)
+            .or_insert(claim_sats);
         state.nonce += 1;
         state.id = Some(txid);
         Ok((state, prev_utxo))
