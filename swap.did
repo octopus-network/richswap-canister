@@ -78,6 +78,7 @@ type Liquidity = record {
   user_share : nat;
   locked_revenue : nat64;
   user_incomes : nat64;
+  locked_revenue_claimed : nat64;
   lock_until : nat32;
 };
 type LiquidityOffer = record {
@@ -113,6 +114,7 @@ type PoolState = record {
   total_rune_donation : nat;
   incomes : nat64;
   locked_lp_revenue : vec record { text; nat64 };
+  claimed : vec record { text; nat64 };
   total_btc_donation : nat64;
   nonce : nat64;
   lp_locks : vec record { text; nat32 };
@@ -205,6 +207,7 @@ service : {
   query_pool : (text) -> (Result_15) query;
   query_tx_records : () -> (Result_16) query;
   recover : () -> ();
+  remove_pool : (text) -> (Result_2);
   rollback_tx : (RollbackTxArgs) -> (Result_7);
   set_donation_amount : (text, nat64, nat) -> (Result_2);
   set_orchestrator : (principal) -> ();
