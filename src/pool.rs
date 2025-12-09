@@ -1345,9 +1345,9 @@ impl LiquidityPool {
         pool_utxo_spend: Vec<String>,
         pool_utxo_receive: Vec<Utxo>,
         input_coins: Vec<InputCoin>,
-        output_coins: Vec<OutputCoin>,
+        _output_coins: Vec<OutputCoin>,
     ) -> Result<(PoolState, Utxo, serde_json::Value), ExchangeError> {
-        (input_coins.len() == 1 && output_coins.len() == 1)
+        (input_coins.len() == 1)
             .then(|| ())
             .ok_or(ExchangeError::InvalidSignPsbtArgs(
                 "invalid input/output coins, swap requires 1 input and 1 output".to_string(),
@@ -1358,7 +1358,6 @@ impl LiquidityPool {
                 "pool_utxo_receive not found".to_string(),
             ))?;
         let input = input_coins.first().clone().expect("checked;qed");
-        let output = output_coins.first().clone().expect("checked;qed");
         let mut state = self
             .states
             .last()
@@ -1414,12 +1413,6 @@ impl LiquidityPool {
                     .checked_add(input.coin.value),
             )
         };
-        // check params
-        (output.coin == offer)
-            .then(|| ())
-            .ok_or(ExchangeError::InvalidSignPsbtArgs(
-                "inputs mismatch with pre_swap".to_string(),
-            ))?;
         let (btc_output, rune_output) = (
             btc_output.ok_or(ExchangeError::Overflow)?,
             rune_output.ok_or(ExchangeError::Overflow)?,
