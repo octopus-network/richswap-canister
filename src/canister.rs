@@ -128,6 +128,20 @@ pub fn lock_lp(addr: String, message: String, sig: String) -> Result<(), Exchang
     Ok(())
 }
 
+#[update(guard = "ensure_pool_creator_manager")]
+pub fn pause_swap(pool: String) -> Result<(), ExchangeError> {
+    crate::ensure_online()?;
+    crate::PAUSED_POOLS.with_borrow_mut(|p| p.insert(pool, ()));
+    Ok(())
+}
+
+#[update(guard = "ensure_pool_creator_manager")]
+pub fn resume_swap(pool: String) -> Result<(), ExchangeError> {
+    crate::ensure_online()?;
+    crate::PAUSED_POOLS.with_borrow_mut(|p| p.remove(&pool));
+    Ok(())
+}
+
 #[query]
 pub fn get_pool_state_chain(
     addr: String,
@@ -801,6 +815,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             .map_err(|e| e.to_string())?;
         }
         "withdraw_liquidity" => {
+            crate::ensure_not_paused(&pool_address).map_err(|e| e.to_string())?;
             let (new_state, consumed) = pool
                 .validate_withdrawing_liquidity(
                     txid,
@@ -826,6 +841,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             .map_err(|e| e.to_string())?;
         }
         "claim_revenue" => {
+            crate::ensure_not_paused(&pool_address).map_err(|e| e.to_string())?;
             let (new_state, consumed) = pool
                 .validate_claiming_revenue(
                     txid,
@@ -895,6 +911,7 @@ pub async fn execute_tx(args: ExecuteTxArgs) -> ExecuteTxResponse {
             .map_err(|e| e.to_string())?;
         }
         "swap" => {
+            crate::ensure_not_paused(&pool_address).map_err(|e| e.to_string())?;
             let (new_state, consumed, log) = pool
                 .validate_swap(
                     txid,

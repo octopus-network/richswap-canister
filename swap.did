@@ -19,6 +19,7 @@ type ExchangeError = variant {
   RuneIndexerError : text;
   PoolStateExpired : nat64;
   InvalidSignature;
+  SwapPaused;
   TooSmallFunds;
   LiquidityLocked;
   OnetimePool;
@@ -195,6 +196,7 @@ service : {
   lock_lp : (text, text, text) -> (Result_2);
   new_block : (NewBlockInfo) -> (Result_7);
   pause : () -> ();
+  pause_swap : (text) -> (Result_2);
   pre_add_liquidity : (text, CoinBalance) -> (Result_8) query;
   pre_bi_donate : (text, nat64, CoinBalance) -> (Result_9) query;
   pre_claim_revenue : (text, text) -> (Result_10) query;
@@ -208,6 +210,7 @@ service : {
   query_tx_records : () -> (Result_16) query;
   recover : () -> ();
   remove_pool : (text) -> (Result_2);
+  resume_swap : (text) -> (Result_2);
   rollback_tx : (RollbackTxArgs) -> (Result_7);
   set_donation_amount : (text, nat64, nat) -> (Result_2);
   set_orchestrator : (principal) -> ();
