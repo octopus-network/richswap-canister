@@ -120,6 +120,8 @@ pub enum ExchangeError {
     BlockSyncing,
     #[error("Couldn't add liquidity into onetime pools and it must be permanently locked")]
     OnetimePool,
+    #[error("swap is paused for this pool")]
+    SwapPaused,
 }
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -140,6 +142,7 @@ const PAUSED_ID: MemoryId = MemoryId::new(12);
 const POOLS_MEMORY_ID: MemoryId = MemoryId::new(13);
 const POOL_CREATOR_MEMORY_ID: MemoryId = MemoryId::new(14);
 const SWAP_EXECUTE_LOG_MEMORY_ID: MemoryId = MemoryId::new(15);
+const PAUSED_POOLS_MEMORY_ID: MemoryId = MemoryId::new(16);
 
 thread_local! {
     static MEMORY: RefCell<Option<DefaultMemoryImpl>> = RefCell::new(Some(DefaultMemoryImpl::default()));
@@ -170,6 +173,9 @@ thread_local! {
     static WHITELIST: RefCell<StableBTreeMap<String, (), Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(WHITELIST_ID))));
 
+    static PAUSED_POOLS: RefCell<StableBTreeMap<String, (), Memory>> =
+        RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(PAUSED_POOLS_MEMORY_ID))));
+
     static PAUSED: RefCell<Cell<bool, Memory>> =
         RefCell::new(Cell::init(with_memory_manager(|m| m.get(PAUSED_ID)), false).expect("fail to init a StableCell"));
 
@@ -180,6 +186,17 @@ thread_local! {
 
     static SWAP_EXECUTE_LOG: RefCell<StableBTreeMap<Txid, String, Memory>> =
         RefCell::new(StableBTreeMap::init(with_memory_manager(|m| m.get(SWAP_EXECUTE_LOG_MEMORY_ID))));
+}
+
+pub(crate) fn ensure_not_paused(pool_addr: &String) -> Result<(), ExchangeError> {
+    PAUSED_POOLS
+        .with_borrow(|p| !p.contains_key(pool_addr))
+        .then(|| ())
+        .ok_or(ExchangeError::SwapPaused)
+}
+
+pub(crate) fn is_swap_paused(pool_addr: &String) -> bool {
+    PAUSED_POOLS.with_borrow(|p| p.contains_key(pool_addr))
 }
 
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
