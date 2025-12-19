@@ -120,6 +120,7 @@ impl LiquidityPool {
             "total_rune_donation": self.states.last().map(|state| state.total_rune_donation).unwrap_or_default(),
             "template": self.template,
             "fee_adjust_mechanism": self.fee_adjust_mechanism,
+            "paused": crate::is_swap_paused(&self.addr),
         });
         serde_json::to_string(&attr).expect("failed to serialize")
     }

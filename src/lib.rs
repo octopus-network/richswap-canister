@@ -195,6 +195,10 @@ pub(crate) fn ensure_not_paused(pool_addr: &String) -> Result<(), ExchangeError>
         .ok_or(ExchangeError::SwapPaused)
 }
 
+pub(crate) fn is_swap_paused(pool_addr: &String) -> bool {
+    PAUSED_POOLS.with_borrow(|p| p.contains_key(pool_addr))
+}
+
 fn with_memory_manager<R>(f: impl FnOnce(&MemoryManager<DefaultMemoryImpl>) -> R) -> R {
     MEMORY_MANAGER.with(|cell| {
         f(cell
