@@ -1055,7 +1055,7 @@ pub fn query_blocks() -> Result<Vec<BlockInfo>, String> {
     Ok(res)
 }
 
-#[update(guard = "ensure_guardian")]
+#[update(guard = "ensure_pool_creator_manager")]
 pub async fn sync_with_btc(addr: String, fee_rate: u64) -> Result<Txid, ExchangeError> {
     let pool = crate::with_pool(&addr, |p| p.clone()).ok_or(ExchangeError::InvalidPool)?;
     let utxos = crate::get_untracked_utxos_of_pool(&pool).await?;
