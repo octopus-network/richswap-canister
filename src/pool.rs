@@ -163,7 +163,7 @@ impl PoolState {
     pub fn btc_supply(&self) -> u64 {
         self.utxo
             .as_ref()
-            .map(|utxo| utxo.sats - self.incomes)
+            .map(|utxo| utxo.sats - self.incomes - self.locked_lp_revenue.values().sum::<u64>())
             .unwrap_or_default()
     }
 
@@ -1487,16 +1487,22 @@ impl LiquidityPool {
         fee_rate: u64,
     ) -> Result<PoolState, ExchangeError> {
         let mut state = self.states.last().ok_or(ExchangeError::EmptyPool)?.clone();
-        let (_, out_rune) = crate::calculate_merge_utxos(inputs, self.base_id());
+        // this what tx actually input
+        let (_, rune_input) = crate::calculate_merge_utxos(inputs, self.base_id());
+        let expecting_lp_locked_revenue = state.locked_lp_revenue.values().sum::<u64>();
+        let expecting_protocol_revenue = state.incomes;
         let mut psbt = crate::construct_psbt(&self.addr, &self.addr, &inputs, fee_rate)?;
-        let out_sats = psbt.unsigned_tx.output[0].value.to_sat();
+        // this what tx actually output
+        let actual_output_sats = psbt.unsigned_tx.output[0].value.to_sat();
+        let expecting_sats_in_lp_pool =
+            actual_output_sats - expecting_protocol_revenue - expecting_lp_locked_revenue;
+        let new_k = crate::sqrt(rune_input.value * (expecting_sats_in_lp_pool) as u128);
         for utxo in inputs {
             crate::psbt::sign(&mut psbt, &utxo, self.meta.id.to_bytes())
                 .await
                 .inspect_err(|e| ic_cdk::println!("sign error: {}", e))
                 .map_err(|_| ExchangeError::ChainKeyError)?;
         }
-        let new_k = crate::sqrt(out_rune.value * (out_sats - state.incomes) as u128);
         let mut new_lp = BTreeMap::new();
         for (lp, share) in state.lp.iter() {
             new_lp.insert(
@@ -1510,11 +1516,11 @@ impl LiquidityPool {
         let k_adjust = new_lp.values().sum();
         let txid = Txid::from_str(&psbt.unsigned_tx.compute_txid().to_string()).unwrap();
         let mut coins = CoinBalances::new();
-        coins.add_coin(&out_rune);
+        coins.add_coin(&rune_input);
         let output = Utxo {
             txid: txid.clone(),
             vout: 0,
-            sats: out_sats,
+            sats: actual_output_sats,
             coins,
         };
         crate::send_transaction(&psbt.extract_tx().expect("shouldn't fail"))
