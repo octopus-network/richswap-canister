@@ -317,6 +317,12 @@ pub(crate) fn create_empty_pool(
     let pool =
         LiquidityPool::new_empty(meta, template, untweaked.clone()).expect("didn't set fee rate");
     let addr = pool.addr.clone();
+    match template {
+        PoolTemplate::Satsman => {
+            PAUSED_POOLS.with_borrow_mut(|p| p.insert(addr.clone(), ()));
+        }
+        _ => {}
+    }
     POOL_TOKENS.with_borrow_mut(|l| {
         l.insert(id, addr.clone());
         POOLS.with_borrow_mut(|p| {

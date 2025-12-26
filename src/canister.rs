@@ -128,14 +128,14 @@ pub fn lock_lp(addr: String, message: String, sig: String) -> Result<(), Exchang
     Ok(())
 }
 
-#[update(guard = "ensure_pool_creator_manager")]
+#[update(guard = "ensure_pool_creator_or_manager")]
 pub fn pause_swap(pool: String) -> Result<(), ExchangeError> {
     crate::ensure_online()?;
     crate::PAUSED_POOLS.with_borrow_mut(|p| p.insert(pool, ()));
     Ok(())
 }
 
-#[update(guard = "ensure_pool_creator_manager")]
+#[update(guard = "ensure_pool_creator_or_manager")]
 pub fn resume_swap(pool: String) -> Result<(), ExchangeError> {
     crate::ensure_online()?;
     crate::PAUSED_POOLS.with_borrow_mut(|p| p.remove(&pool));
@@ -1126,6 +1126,12 @@ fn ensure_pool_creator() -> Result<(), String> {
 
 fn ensure_pool_creator_manager() -> Result<(), String> {
     crate::is_pool_creator_manager(&ic_cdk::caller())
+        .then(|| ())
+        .ok_or("Access denied".to_string())
+}
+
+fn ensure_pool_creator_or_manager() -> Result<(), String> {
+    (crate::is_pool_creator_manager(&ic_cdk::caller()) || crate::is_pool_creator(&ic_cdk::caller()))
         .then(|| ())
         .ok_or("Access denied".to_string())
 }
