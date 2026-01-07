@@ -1477,7 +1477,14 @@ impl LiquidityPool {
         state.nonce += 1;
         state.incomes += protocol_fee;
         state.id = Some(txid);
-        let log = serde_json::json!({"pool": self.addr, "lp_fee": lp_fee, "protocol_fee": protocol_fee, "locked_lp_fee": locked_lp_fee});
+        let log = serde_json::json!({
+            "pool": self.addr,
+            "lp_fee": lp_fee,
+            "protocol_fee": protocol_fee,
+            "locked_lp_fee": locked_lp_fee,
+            "btc_amount": state.btc_supply(),
+            "rune_amount": state.rune_supply(&self.base_id()),
+        });
         Ok((state, prev_utxo, log))
     }
 
