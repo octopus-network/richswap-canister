@@ -17,7 +17,19 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 #[post_upgrade]
-pub fn upgrade() {}
+pub fn upgrade() {
+    crate::POOLS.with_borrow_mut(|pools| {
+        let mut new_pools = std::collections::HashMap::new();
+        for (addr, mut pool) in pools.iter() {
+            pool.fee_rate = pool::DEFAULT_LP_FEE_RATE;
+            pool.burn_rate = pool::DEFAULT_PROTOCOL_FEE_RATE;
+            new_pools.insert(addr.clone(), pool);
+        }
+        for (addr, pool) in new_pools.into_iter() {
+            pools.insert(addr, pool);
+        }
+    })
+}
 
 #[update(guard = "ensure_owner")]
 pub fn set_orchestrator(principal: Principal) {

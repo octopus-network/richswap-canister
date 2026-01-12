@@ -9,10 +9,8 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-/// represents 0.007
-pub const DEFAULT_LP_FEE_RATE: u64 = 7000;
-/// represents 0.002
-pub const DEFAULT_PROTOCOL_FEE_RATE: u64 = 2000;
+pub const DEFAULT_LP_FEE_RATE: u64 = 11200;
+pub const DEFAULT_PROTOCOL_FEE_RATE: u64 = 3200;
 pub const ONETIME_INIT_FEE_RATE: u64 = 990_000; // 99%
 pub const ONETIME_MAX_DECR: u64 = 890_000; // 89%
 pub const ONETIME_DECR_INTERVAL_MS: u64 = 600_000; // 10 min
